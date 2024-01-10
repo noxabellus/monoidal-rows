@@ -1,0 +1,84 @@
+name: monoidal-rows
+version: 0.1.0.0
+
+default-extensions:
+  - TemplateHaskell
+  - TemplateHaskellQuotes
+  - QuasiQuotes
+  - LambdaCase
+  - BlockArguments
+  - ImplicitParams
+  - MultiWayIf
+
+  - ExplicitNamespaces
+  - ImportQualifiedPost
+
+  - DataKinds
+  - PolyKinds
+  - ConstraintKinds
+  - KindSignatures
+  - ExplicitForAll
+  - ScopedTypeVariables
+  - LiberalTypeSynonyms
+  - RankNTypes
+  - GADTs
+  - TypeOperators
+  - TypeFamilies
+  - TypeFamilyDependencies
+  - TypeApplications
+  - ExistentialQuantification
+  - PartialTypeSignatures
+  - AllowAmbiguousTypes
+  - StandaloneKindSignatures
+
+  - MultiParamTypeClasses
+  - ConstrainedClassMethods
+  - DefaultSignatures
+  - FunctionalDependencies
+  - TypeSynonymInstances
+  - FlexibleContexts
+  - FlexibleInstances
+  - UndecidableInstances
+  - UndecidableSuperClasses
+  - ImpredicativeTypes
+  - NoMonomorphismRestriction
+  
+  - PatternSynonyms
+  - ViewPatterns
+  - BangPatterns
+
+  - TupleSections
+  - DisambiguateRecordFields
+  - DuplicateRecordFields
+  - NamedFieldPuns
+
+  - StandaloneDeriving
+  - DerivingStrategies
+  - DerivingVia
+  - DeriveAnyClass
+  - GeneralisedNewtypeDeriving
+  - DeriveFunctor
+  - DeriveFoldable
+  - DeriveTraversable
+  - DeriveDataTypeable
+  - DeriveGeneric
+
+
+ghc-options:
+  - -Wall
+
+dependencies:
+  - base
+  - containers
+  - bimap
+  - mtl
+  - hashable
+  - data-default
+  - template-haskell
+  - pretty-simple
+  - array
+
+executables:
+  monoidal_rows:
+    main: Main.hs
+    source-dirs: src
