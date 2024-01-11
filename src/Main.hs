@@ -12,6 +12,8 @@ import Data.Bifunctor
 import Data.Functor
 import Control.Monad.Except (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets, modify)
+import Control.Monad.State
+import Control.Monad.Except
 import Control.Applicative
 import Control.Monad
 import Data.Foldable
@@ -191,35 +193,18 @@ type Subst = Map TypeVar Type
 type SubstSt = (Int, Subst)
 
 newtype Ti a
-    = Ti { runTi :: SubstSt -> Either String (a, SubstSt) }
-    deriving Functor
-
-instance Applicative Ti where
-    pure a = Ti \s -> Right (a, s)
-    Ti f <*> Ti a = Ti \s -> do
-        (f', s') <- f s
-        (a', s'') <- a s'
-        return (f' a', s'')
-
-instance Monad Ti where
-    Ti a >>= f = Ti \s -> do
-        (a', s') <- a s
-        runTi (f a') s'
+    = Ti { unTi :: StateT SubstSt (Except String) a }
+    deriving Functor 
+    deriving newtype Applicative
+    deriving newtype Monad
+    deriving newtype (MonadError String)
+    deriving newtype (MonadState SubstSt)
 
 instance MonadFail Ti where
-    fail msg = Ti \_ -> Left msg
+    fail msg = throwError msg
 
-instance MonadError String Ti where
-    throwError = fail
-    catchError (Ti a) f = Ti \s -> case a s of
-        Left e -> runTi (f e) s
-        Right x -> Right x
-
-instance MonadState SubstSt Ti where
-    get = Ti \s -> Right (s, s)
-    put s = Ti \_ -> Right ((), s)
-
-
+runTi :: Ti a -> SubstSt -> Either String (a, SubstSt)
+runTi (Ti m) s = runExcept $ runStateT m s
 
 
 class TVars a where
@@ -900,16 +885,14 @@ apConcatRows a b c = case (a, b, c) of
                     Just t'b -> (ma, CEqual (t'b, t'c) : es)
                     _ -> (Map.insert k t'c ma, es)
         in (CEqual (TVar tv'a, TRow m'a) : cs)
-
-
-
-
+ 
 
 ti :: Env -> UntypedTerm -> Either String (Scheme (Type, TypedTerm), Subst)
-ti env x = second snd <$> flip runTi (0, mempty) do
-    (cs :=> x'@(AnnOf t'x)) <- infer env x
-    cs' <- solve cs
-    generalize env (cs' :=> (t'x, x'))
+ti env x = second snd <$> runTi m (0, mempty) where 
+    m = do 
+        (cs :=> x'@(AnnOf t'x)) <- infer env x
+        cs' <- solve cs
+        generalize env (cs' :=> (t'x, x'))
 
 -- FIXME: ????
 -- tc :: Env -> Type -> UntypedTerm -> Either String (Scheme TypedTerm)
