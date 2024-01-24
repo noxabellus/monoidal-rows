@@ -908,6 +908,8 @@ apUnify = curry \case
             fail $ "row labels mismatch: " <> pretty m'a <> " ∪ " <> pretty m'b
         concat <$> forM (zip (Map.elems m'a) (Map.elems m'b)) (uncurry apUnify)
 
+    -- BUG: This is very close but subtly wrong,
+    --      effects in l'b that are not in l'a are uncaught
     (TEffectRow l'a, TEffectRow l'b) ->
         concat <$> forM l'a \a ->
             case exactEff l'b a of
