@@ -1,7 +1,6 @@
 .depr
+.local
 .stack-work
 .vscode
 stack.yaml.lock
 monoidal-rows.cabal
-*.z
-*.pdf

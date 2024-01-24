@@ -1,4 +1,3 @@
-{-# OPTIONS_GHC -Wno-unused-imports #-}
 {-# OPTIONS_GHC -Wno-missing-signatures #-}
 {-# OPTIONS_GHC -Wno-missing-pattern-synonym-signatures #-}
 {-# OPTIONS_GHC -Wno-unused-top-binds #-}
@@ -7,28 +6,22 @@ import Data.Set (Set)
 import Data.Map.Strict qualified as Map
 import Data.Set qualified as Set
 import Data.List qualified as List
-import Data.String qualified as String
 import Data.Bifunctor
 import Data.Functor
 import Control.Monad.Except (MonadError(..))
 import Control.Monad.State.Class (MonadState(..), gets, modify)
-import Control.Applicative
 import Control.Monad
 import Data.Foldable
 import Data.Maybe
-import Debug.Trace (traceM)
+-- import Debug.Trace (traceM)
 
 todo = error "nyi"
-unreachable = error "unreachable code reached"
 
 partitionWith :: (a -> Either b c) -> [a] -> ([b], [c])
 partitionWith f = flip foldr mempty \a (bs, cs) ->
     case f a of
         Left b -> (b:bs, cs)
         Right c -> (bs, c:cs)
-
-compose :: (a -> b) -> (b -> c) -> (a -> c)
-compose = flip (.)
 
 
 foldBy :: (Foldable t) => b -> t a -> (a -> b -> b) -> b
