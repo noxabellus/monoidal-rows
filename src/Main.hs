@@ -908,16 +908,15 @@ apUnify = curry \case
             fail $ "row labels mismatch: " <> pretty m'a <> " ∪ " <> pretty m'b
         concat <$> forM (zip (Map.elems m'a) (Map.elems m'b)) (uncurry apUnify)
 
-    -- BUG: This is very close but subtly wrong,
-    --      effects in l'b that are not in l'a are uncaught
-    (TEffectRow l'a, TEffectRow l'b) ->
-        concat <$> forM l'a \a ->
-            case exactEff l'b a of
-                Just _ -> pure []
-                _ -> case scanEff l'b a of
-                    [] -> fail $ "effect not found: " <> brackets (pretty a) <> " ∪ " <> pretty l'b
-                    [b] -> apUnify a b
-                    bs -> pure [SubRow (effectSingleton a) (TEffectRow bs)]
+    (TEffectRow a, TEffectRow b) -> do
+        liftM2 (<>) (mergeEff (a List.\\ b) b) (mergeEff (b List.\\ a) a)
+        where
+            mergeEff l'a l'b = foldByM mempty l'a \e'a cs -> case scanEff l'b e'a of
+                [] -> fail $ "effect not found: " <> brackets (pretty e'a) <> " ∪ " <> pretty l'b
+                [e'b] -> apUnify e'a e'b <&> (<> cs)
+                bs -> pure (SubRow (effectSingleton e'a) (TEffectRow bs) : cs)
+
+        
 
     (a, b) -> fail $ "cannot unify " <> pretty a <> " ∪ " <> pretty b
         
@@ -1099,7 +1098,7 @@ apConcatRows a b c = case (a, b, c) of
         in (CEqual (TVar tv'a, TDataRow m'a) : cs)
 
     mergeEffectVar tv'a l'b l'c =
-        let l'a = l'c List.\\ l'b
+        let l'a = (l'c List.\\ l'b) <> (l'b List.\\ l'c)
         in [CEqual (TVar tv'a, TEffectRow l'a)]
 
 pattern TUnit = TCon ("()", KType)
