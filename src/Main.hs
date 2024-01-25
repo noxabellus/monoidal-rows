@@ -323,7 +323,7 @@ instance TVars Type where
         TProd a -> TProd (apply s a)
         TSum a -> TSum (apply s a)
         TDataRow a -> TDataRow (apply s a)
-        TEffectRow a -> TEffectRow (apply s a)
+        TEffectRow a -> TEffectRow (List.nub (apply s a))
 
 instance TVars Constraint where
     ftvs f = \case
