@@ -20,9 +20,11 @@ default-extensions:
   - DeriveFoldable
   - DeriveTraversable
 
-
 ghc-options:
   - -Wall
+  - -Wno-missing-signatures
+  - -Wno-missing-pattern-synonym-signatures
+  - -Wno-unused-top-binds
 
 dependencies:
   - base
