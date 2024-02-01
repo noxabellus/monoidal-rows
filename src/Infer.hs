@@ -347,10 +347,10 @@ apUnify = curry \case
     (TEffectRow a, TEffectRow b) -> do
         liftM2 (<>) (mergeEff (a List.\\ b) b) (mergeEff (b List.\\ a) a)
         where
-            mergeEff l'a l'b = foldByM mempty l'a \e'a cs -> case scanEff l'b e'a of
-                [] -> fail $ "effect not found: " <> brackets (pretty e'a) <> " ∪ " <> pretty l'b
-                [e'b] -> apUnify e'a e'b <&> (<> cs)
-                bs -> pure (SubRow (effectSingleton e'a) (TEffectRow bs) : cs)
+        mergeEff l'a l'b = foldByM mempty l'a \e'a cs -> case scanEff l'b e'a of
+            [] -> fail $ "effect not found: " <> brackets (pretty e'a) <> " ∪ " <> pretty l'b
+            [e'b] -> apUnify e'a e'b <&> (<> cs)
+            bs -> pure (SubRow (effectSingleton e'a) (TEffectRow bs) : cs)
 
         
 
@@ -400,17 +400,22 @@ apSubRows = curry \case
 
     (a, b) -> fail $ "expected row types (of the same kind) for row sub, got " <> pretty a <> " ◁ " <> pretty b
     where
-        findEff m t =
-            case exactEff m t of
-                Just t' -> pure $ CEqual (t, t')
-                _ -> case scanEff m t of
-                    [] -> fail $ "effect not found: " <> brackets (pretty t) <> " ◁ " <> pretty m
-                    [t'] -> pure $ CEqual (t, t')
-                    ts -> pure $ CRow $ SubRow (effectSingleton t) (TEffectRow ts)
+    findEff m t =
+        case exactEff m t of
+            Just t' -> pure $ CEqual (t, t')
+            _ -> case scanEff m t of
+                [] -> fail $ "effect not found: " <> brackets (pretty t) <> " ◁ " <> pretty m
+                [t'] -> pure $ CEqual (t, t')
+                ts -> pure $ CRow $ SubRow (effectSingleton t) (TEffectRow ts)
 
 
+exactEff :: [Type] -> Type -> Maybe Type
 exactEff m t = List.find (== t) m
+
+scanEff :: [Type] -> Type -> [Type]
 scanEff m t = List.filter (unifiable t) m
+
+unifiable :: Type -> Type -> Bool
 unifiable = curry \case
     (TVar tv'a, TVar tv'b) -> kindOf tv'a == kindOf tv'b
     (TVar tv'a, b) -> kindOf tv'a == kindOf b
@@ -467,16 +472,15 @@ apMergeSubRows cs =
 
 apConcatRows :: Type -> Type -> Type -> Ti [Constraint]
 apConcatRows a b c = case (a, b, c) of
-    (TDataRow m'a, TDataRow m'b, t'c) ->
-        let (m'c, eqs) =
-                foldBy mempty (Map.keys m'a `List.union` Map.keys m'b) \k (m, cs) ->
-                    case (Map.lookup k m'a, Map.lookup k m'b) of
-                        (Just t'a, Just t'b) -> (Map.insert k t'a m, CEqual (t'a, t'b) : cs)
-                        (Just t'a, _) -> (Map.insert k t'a m, cs)
-                        (_, Just t'b) -> (Map.insert k t'b m, cs)
-                        _ -> (m, cs)
-        in pure (CEqual (TDataRow m'c, t'c) : eqs)
+    (TDataRow m'a, TDataRow m'b, t'c) -> do
+        m'c <- foldByM mempty (Map.keys m'a `List.union` Map.keys m'b) \k m ->
+            case (Map.lookup k m'a, Map.lookup k m'b) of
+                (Just t'a, Nothing) -> pure (Map.insert k t'a m)
+                (Nothing, Just t'b) -> pure (Map.insert k t'b m)
+                _ -> fail $ "label " <> pretty k <> " is not disjoint in sub-rows of concat " <> pretty m'a <> " ⊙ " <> pretty m'b
+        pure [CEqual (TDataRow m'c, t'c)]
       
+
     (TVar tv'a, TDataRow m'b, TDataRow m'c) -> pure (mergeDataVar tv'a m'b m'c)
     (TDataRow m'a, TVar tv'b, TDataRow m'c) -> pure (mergeDataVar tv'b m'a m'c)
 
@@ -524,7 +528,8 @@ apConcatRows a b c = case (a, b, c) of
         , kindOf tv'c == KEffectRow ->
             pure [CRow $ ConcatRow (TEffectRow m'a)  (TVar tv'b) (TVar tv'c)]
 
-    _ -> fail $ "expected row types (of the same kind) for row concat, got " <> pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
+    _ -> fail $ "expected row types (of the same kind) for row concat, got "
+        <> pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
     where
     mergeDataVar tv'a m'b m'c =
         let (m'a, cs) = foldBy mempty (Map.toList m'c) \(k, t'c) (ma, es) ->
