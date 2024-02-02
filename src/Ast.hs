@@ -24,6 +24,8 @@ data Term
 
     | SumConstructor Name Term
     | SumExpand Term
+
+    | Handler Type (Map Name (Patt, Term)) Term
     deriving Show
 infixl 8 `Ann`
 pattern UnAnn x <- Ann x _
@@ -190,6 +192,12 @@ instance Pretty Term where
         ProductSelect x n -> parensIf (p > 6) $ prettyPrec 6 x <> " \\ " <> n
         SumConstructor n x -> angles $ n <> " = " <> pretty x
         SumExpand x -> parensIf (p > 5) $ "expand " <> prettyPrec 5 x
+        Handler t hm b -> parensIf (p > 0) $
+            "with " <> prettyPrec 0 t <> " handler "
+                <> List.intercalate ", " do
+                    Map.toList hm <&> \(n, (v, x)) ->
+                        n <> " = " <> pretty v <> " => " <> pretty x
+            <> " do " <> pretty b
 
 instance Pretty Patt where
     prettyPrec p = \case

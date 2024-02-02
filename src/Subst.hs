@@ -52,6 +52,7 @@ instance TVars Term where
         ProductSelect x _ -> ftvs f x
         SumConstructor _ x -> ftvs f x
         SumExpand x -> ftvs f x
+        Handler t hm x -> ftvs f t `List.union` ftvs f hm `List.union` ftvs f x
 
     apply s = \case
         Var v -> Var v
@@ -67,6 +68,7 @@ instance TVars Term where
         ProductSelect x n -> ProductSelect (apply s x) n
         SumConstructor n x -> SumConstructor n (apply s x)
         SumExpand x -> SumExpand (apply s x)
+        Handler t hm x -> Handler (apply s t) (apply s hm) (apply s x)
 
 instance TVars Patt where
     ftvs f = \case

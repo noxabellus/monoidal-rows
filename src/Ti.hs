@@ -3,6 +3,8 @@ module Ti where
 import Data.Map.Strict (Map)
 import Data.Map.Strict qualified as Map
 
+import Data.List qualified as List
+
 import Data.Bifunctor
 
 import Control.Monad.Except
@@ -12,12 +14,32 @@ import Ast
 import Subst
 
 type Evidence = Type
-type Env = Map Var (Scheme Type)
 type SubstSt = (Int, Subst)
+type TypeEnv = Map Var (Scheme Type)
+type EffectEnv = Map Var (Scheme (Map Name (Type, Type)))
+
+data Env =
+    Env
+    { typeEnv :: TypeEnv
+    , effectEnv :: EffectEnv
+    }
+    deriving Show
 
 newtype Ti a
     = Ti { runTi :: Int -> SubstSt -> Either String (a, SubstSt) }
     deriving Functor
+
+
+instance Semigroup Env where
+    Env te1 ee1 <> Env te2 ee2 = Env (te1 <> te2) (ee1 <> ee2)
+
+instance Monoid Env where
+    mempty = Env mempty mempty
+
+instance TVars Env where
+    ftvs f (Env te ee) = ftvs f te `List.union` ftvs f ee
+    apply s (Env te ee) = Env (apply s te) (apply s ee)
+
 
 instance Applicative Ti where
     pure a = Ti \_ s -> Right (a, s)
@@ -107,15 +129,18 @@ freshEffectConcat = do
     pure (ConcatRow r'a r'b r'c)
 
 
-
+effLookup :: Env -> Var -> Ti (Scheme (Map Name (Type, Type)))
+effLookup env i = case Map.lookup i (effectEnv env) of
+    Just sc -> pure sc
+    Nothing -> fail $ "unbound effect " <> show i
 
 envLookup :: Env -> Var -> Ti (Scheme Type)
-envLookup env i = case Map.lookup i env of
+envLookup env i = case Map.lookup i (typeEnv env) of
     Just sc -> pure sc
     Nothing -> fail $ "unbound variable " <> show i
 
 envExt :: Env -> Var -> Type -> Env
-envExt env i t = Map.insert i ([] `Forall` [] :=> t) env
+envExt (Env te ee) i t = Env (Map.insert i ([] `Forall` [] :=> t) te) ee
 
 envSingleton :: Var -> Type -> Env
 envSingleton = envExt mempty

@@ -39,6 +39,18 @@ instantiate (Forall bvs qt) = do
         (TvBound bv, ) <$> fresh (kindOf bv)
     pure (apply i qt)
 
+instantiateWith :: (Pretty a, TVars a) => [Type] -> Scheme a -> Ti (Qualified a)
+instantiateWith ps sc@(Forall bvs qt) = do
+    catchError do
+            when (length bvs /= length ps) do
+                fail $ "expected " <> show (length bvs) <> " type arguments, got " <> show (length ps)
+            unless (all (uncurry (==)) $ zip (kindOf <$> bvs) (kindOf <$> ps)) do
+                fail $ "kind mismatch: " <> pretty bvs <> " vs " <> pretty (kindOf <$> ps)
+        \e ->
+            throwError $ "cannot instantiate scheme " <> pretty sc <> " with parameters " <> pretty ps <> ": " <> e
+
+    let i = Map.fromList $ zip (TvBound <$> bvs) ps
+    pure (apply i qt)
 
 
 infer :: Env -> UntypedTerm -> Ti (Qualified (TypedTerm, Evidence))
@@ -135,9 +147,40 @@ infer env ut = do
             cs'x :=> (x', es'x) <- check env (TSum r'a) x
             pure $ CRow cs : cs'x :=>
                 (SumExpand x' `Ann` TSum r'b, es'x)
+        
+        Handler t hm b -> do
+            let (effName, effArgs) = splitEffectType t
+            cs'em :=> em <- effLookup env effName >>= instantiateWith effArgs
+
+            when (Map.keys hm /= Map.keys em) do
+                fail $ "handler effect mismatch: expected cases " <> pretty (Map.keys hm)
+                    <> ", got " <> pretty (Map.keys em)
+
+            cs'hm :=> (hm', es'hm) <-
+                foldByM ([] :=> (mempty, TEffectRowNil)) (Map.toList em)
+                \(caseName, (expectedIn, expectedOut)) (cs'hm :=> (hm', es'hm)) -> do
+                    let (p, x) = hm Map.! caseName
+                    cs'p :=> (p', env'p) <- checkPatt env expectedIn p
+                    cs'x :=> (x', es'x) <- check (env'p <> env) expectedOut x
+                    es <- fresh KEffectRow
+                    pure $ CRow (ConcatRow es'x es'hm es)
+                         : cs'p <> cs'x <> cs'x <> cs'hm :=>
+                            (Map.insert caseName (p', x') hm', es)
+            
+            cs'b :=> (b'@(AnnOf t'b), es'b) <- infer env b
+            [es'rb, es] <- freshN [KEffectRow, KEffectRow]
+            pure $ CRow (ConcatRow (effectSingleton t) es'rb es'b)
+                 : CRow (ConcatRow es'rb es'hm es)
+                 : cs'b <> cs'hm <> cs'em :=>
+                    (Handler t hm' b' `Ann` t'b, es)
 
     -- res <$ traceM do
     --     replicate iid ' ' <> "result " <> pretty res
+    where
+    splitEffectType = \case
+        TApp a b -> let (name, args) = splitEffectType a in (name, args <> [b])
+        TCon (n, _) -> (n, [])
+        t -> error $ "expected effect type/effect type application, got " <> pretty t
 
 check :: Env -> Type -> UntypedTerm -> Ti (Qualified (TypedTerm, Evidence))
 check env tx ut = do
@@ -344,15 +387,13 @@ apUnify = curry \case
             fail $ "row labels mismatch: " <> pretty m'a <> " ∪ " <> pretty m'b
         concat <$> forM (zip (Map.elems m'a) (Map.elems m'b)) (uncurry apUnify)
 
-    (TEffectRow a, TEffectRow b) -> do
+    (TEffectRow a, TEffectRow b) ->
         liftM2 (<>) (mergeEff (a List.\\ b) b) (mergeEff (b List.\\ a) a)
         where
         mergeEff l'a l'b = foldByM mempty l'a \e'a cs -> case scanEff l'b e'a of
-            [] -> fail $ "effect not found: " <> brackets (pretty e'a) <> " ∪ " <> pretty l'b
+            [] -> fail $ "effect " <> pretty e'a <> " not found: " <> pretty a <> " ∪ " <> pretty b
             [e'b] -> apUnify e'a e'b <&> (<> cs)
             bs -> pure (SubRow (effectSingleton e'a) (TEffectRow bs) : cs)
-
-        
 
     (a, b) -> fail $ "cannot unify " <> pretty a <> " ∪ " <> pretty b
         
@@ -383,8 +424,14 @@ apSubRows = curry \case
                 Just t'b -> pure $ CEqual (t'a, t'b)
                 _ -> fail $ "row label " <> pretty k <> " not found: " <> pretty m'a <> " ◁ " <> pretty m'b
 
-    (TEffectRow m'a, TEffectRow m'b) ->
-        forM m'a (findEff m'b)
+    (TEffectRow m'a, TEffectRow m'b) -> forM m'a (findEff m'b) where
+        findEff m t =
+            case exactEff m t of
+                Just t' -> pure $ CEqual (t, t')
+                _ -> case scanEff m t of
+                    [] -> fail $ "effect" <> pretty t <> "not found: " <> pretty m'a <> " ◁ " <> pretty m'b
+                    [t'] -> pure $ CEqual (t, t')
+                    ts -> pure $ CRow $ SubRow (effectSingleton t) (TEffectRow ts)
 
     (TVar tv'a, TVar tv'b)
         | let k = kindOf tv'a
@@ -399,14 +446,6 @@ apSubRows = curry \case
     (TEffectRow m'a,  TVar tv'b) | kindOf tv'b == KEffectRow -> pure [CRow $ SubRow (TEffectRow m'a)  (TVar tv'b)]
 
     (a, b) -> fail $ "expected row types (of the same kind) for row sub, got " <> pretty a <> " ◁ " <> pretty b
-    where
-    findEff m t =
-        case exactEff m t of
-            Just t' -> pure $ CEqual (t, t')
-            _ -> case scanEff m t of
-                [] -> fail $ "effect not found: " <> brackets (pretty t) <> " ◁ " <> pretty m
-                [t'] -> pure $ CEqual (t, t')
-                ts -> pure $ CRow $ SubRow (effectSingleton t) (TEffectRow ts)
 
 
 exactEff :: [Type] -> Type -> Maybe Type
@@ -442,6 +481,7 @@ apMergeSubRows cs =
     kindSplit = partitionWith \case
         (a, b) | kindOf a == KDataRow || kindOf b == KDataRow -> Left (a, b)
         c -> Right c
+
     mergeData subs =
         foldBy mempty subs \constr (subMap, eqs, ignore) ->
             case constr of
@@ -450,28 +490,32 @@ apMergeSubRows cs =
                         (bMap', newEqs) = joinDataMap (bMap, mempty) (Map.toList aMap)
                     in (Map.insert b bMap' subMap, newEqs <> eqs, ignore)
                 (a, b) -> (subMap, eqs, SubRow a b : ignore)
-    mergeEffect subs =
-        foldBy mempty subs \constr (subMap, eqs, ignore) ->
-            case constr of
-                (TEffectRow aList, TVar b) ->
-                    let bList = fromMaybe mempty (Map.lookup b subMap)
-                        (bList', newEqs) = joinEffectMap (bList, mempty) aList
-                    in (Map.insert b bList' subMap, newEqs <> eqs, ignore)
-                (a, b) -> (subMap, eqs, SubRow a b : ignore)
     joinDataMap =
         foldr \(k, t) (bMap, eqs) ->
             case Map.lookup k bMap of
                 Just t' -> (bMap, (t, t') : eqs)
                 _ -> (Map.insert k t bMap, eqs)
+
+    mergeEffect subs =
+        foldBy mempty subs \constr (subMap, eqs, ignore) ->
+            case constr of
+                (TEffectRow aList, TVar b) ->
+                    let bList = fromMaybe mempty (Map.lookup b subMap)
+                        (bList', newEqs, newSubs) = joinEffectMap (bList, mempty, mempty) aList
+                    in (Map.insert b bList' subMap, newEqs <> eqs, ignore <> newSubs)
+                (a, b) -> (subMap, eqs, SubRow a b : ignore)
     joinEffectMap =
-        foldr \t (bList, eqs) ->
-            if t `elem` bList
-                then (bList, eqs)
-                else (t : bList, eqs)
+        foldr \t (bList, eqs, subs) ->
+            case exactEff bList t of
+                Just _ -> (bList, eqs, subs)
+                _ -> case scanEff bList t of
+                    [] -> (t : bList, eqs, subs)
+                    [t'] -> (bList, (t, t') : eqs, subs)
+                    ts -> (bList, eqs, SubRow (effectSingleton t) (TEffectRow ts) : subs)
 
 
 apConcatRows :: Type -> Type -> Type -> Ti [Constraint]
-apConcatRows a b c = case (a, b, c) of
+apConcatRows ta tb tc = case (ta, tb, tc) of
     (TDataRow m'a, TDataRow m'b, t'c) -> do
         m'c <- foldByM mempty (Map.keys m'a `List.union` Map.keys m'b) \k m ->
             case (Map.lookup k m'a, Map.lookup k m'b) of
@@ -484,12 +528,20 @@ apConcatRows a b c = case (a, b, c) of
     (TVar tv'a, TDataRow m'b, TDataRow m'c) -> pure (mergeDataVar tv'a m'b m'c)
     (TDataRow m'a, TVar tv'b, TDataRow m'c) -> pure (mergeDataVar tv'b m'a m'c)
 
-    (TEffectRow l'a, TEffectRow l'b, t'c) ->
-        let l'c = l'a `List.union` l'b
-        in pure [CEqual (TEffectRow l'c, t'c)]
+    (TEffectRow a, TEffectRow b, t'c) -> do
+        let (cs, c) =
+                foldBy (mempty  :: ([Constraint], [Type])) (a <> b)
+                \e (xs, ts) -> case exactEff ts e of
+                    Just _ -> (xs, ts)
+                    _ -> case scanEff ts e of
+                        [] -> (xs, e : ts)
+                        [e'] -> (CEqual (e, e') : xs, ts)
+                        es' -> (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs, ts)
+        pure (CEqual (TEffectRow c, t'c) : cs)
+
     
-    (TVar tv'a, TEffectRow l'b, TEffectRow l'c) -> pure (mergeEffectVar tv'a l'b l'c)
-    (TEffectRow l'a, TVar tv'b, TEffectRow l'c) -> pure (mergeEffectVar tv'b l'a l'c)
+    (TVar tv'a, TEffectRow l'b, TEffectRow l'c) -> mergeEffectVar tv'a l'b l'c
+    (TEffectRow l'a, TVar tv'b, TEffectRow l'c) -> mergeEffectVar tv'b l'a l'c
 
     (TVar tv'a, TVar tv'b, TVar tv'c)
         | let k = kindOf tv'a
@@ -529,7 +581,7 @@ apConcatRows a b c = case (a, b, c) of
             pure [CRow $ ConcatRow (TEffectRow m'a)  (TVar tv'b) (TVar tv'c)]
 
     _ -> fail $ "expected row types (of the same kind) for row concat, got "
-        <> pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
+        <> pretty ta <> " ⊙ " <> pretty tb <> " ~ " <> pretty tc
     where
     mergeDataVar tv'a m'b m'c =
         let (m'a, cs) = foldBy mempty (Map.toList m'c) \(k, t'c) (ma, es) ->
@@ -538,19 +590,28 @@ apConcatRows a b c = case (a, b, c) of
                     _ -> (Map.insert k t'c ma, es)
         in (CEqual (TVar tv'a, TDataRow m'a) : cs)
 
-    mergeEffectVar tv'a l'b l'c =
-        let l'a = (l'c List.\\ l'b) <> (l'b List.\\ l'c)
-        in [CEqual (TVar tv'a, TEffectRow l'a)]
+    mergeEffectVar tv'a l'b l'c = do
+        let (cs, l'a) =
+                foldBy mempty (l'c List.\\ l'b)
+                \e (xs, a) -> case scanEff l'b e of
+                    [] -> (xs, e : a)
+                    [e'] -> (CEqual (e, e') : xs, a)
+                    es' -> (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs, a)
+        cs' <-
+            foldByM mempty (l'b List.\\ l'c)
+            \e xs -> case scanEff l'c e of
+                [] -> fail $ "effect " <> pretty e <> " not found: " <> pretty l'b <> " ◂ " <> pretty l'c
+                [e'] -> pure (CEqual (e, e') : xs)
+                es' -> pure (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs)
+        pure (CEqual (TEffectRow l'a, TVar tv'a) : cs <> cs')
 
 
 
 ti :: Env -> UntypedTerm -> Either String (Scheme (Type, TypedTerm), Subst)
 ti env x = second snd <$> runTi action 0 (0, mempty) where
     action = do
-        (cs :=> (x'@(AnnOf t'x), es'x)) <- infer env x
-        unless (case es'x of TEffectRowNil -> True; _ -> False) do
-            fail $ "unhandleable effects in top-level initializer: " <> pretty es'x
-        cs' <- solve cs
+        cs :=> (x'@(AnnOf t'x), es'x) <- infer env x
+        cs' <- solve (CEqual (TEffectRowNil, es'x) : cs)
         generalize env (cs' :=> (t'x, x'))
 
 

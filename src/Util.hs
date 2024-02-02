@@ -23,7 +23,8 @@ foldBy b a f = foldr f b a
 foldByM :: (Foldable t, Monad m) => b -> t a -> (a -> b -> m b) -> m b
 foldByM b a f = foldrM f b a
 
-
+compose :: (a -> b) -> (b -> c) -> (a -> c)
+compose = flip (.)
 
 class Nil m where
     nil :: m

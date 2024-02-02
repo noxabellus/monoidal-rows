@@ -1,8 +1,11 @@
 import Data.Map.Strict qualified as Map
 
-
+import Util
+import Pretty
 import Ast
+import Subst
 import Ti
+import Infer
 
 
 
@@ -15,7 +18,8 @@ pattern TWriteCon = TCon ("Write", KType :~> KEffect)
 pattern TWrite a = TApp TWriteCon a
 
 env0 :: Env
-env0 = Map.fromList
+env0 = Env
+  { typeEnv = Map.fromList
     [ ( "read"
       , Forall [BoundType 0 KType] $
             [] :=> TFun
@@ -47,10 +51,34 @@ env0 = Map.fromList
                 (TEffectRow [])
       )
     ]
+  , effectEnv = Map.fromList
+    [ ( "Read"
+      , Forall [BoundType 0 KType] $
+            [] :=> Map.fromList
+                [ ( "read"
+                  , (TUnit, TVar (TvBound (BoundType 0 KType)))
+                )
+            ]
+      )
+    , ( "Write"
+      , Forall [BoundType 0 KType] $
+            [] :=> Map.fromList
+                [ ( "write"
+                  , (TVar (TvBound (BoundType 0 KType)), TUnit)
+                )
+            ]
+      )
+    ]
+  }
 
 
-
-
+test :: UntypedTerm -> IO ()
+test = compose (ti env0) \case
+  Left e -> putStrLn "failed:" >> putStrLn e
+  Right (x, s) -> do
+    putStrLn "succeeded:"
+    putStrLn $ pretty x
+    putStrLn $ pretty (apply s s)
 
 
 
