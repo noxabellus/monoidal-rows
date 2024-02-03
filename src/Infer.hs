@@ -1,13 +1,10 @@
 module Infer where
 
-import Data.Functor ((<&>))
 import Data.Bifunctor
 
 import Data.Map.Strict qualified as Map
-import Data.List qualified as List
 
 import Control.Monad.Except
-import Control.Monad.State.Class
 
 import Util
 import Pretty
@@ -16,39 +13,6 @@ import Subst
 import Ti
 import Solve
 
-
-
-
-generalize :: TVars a => Env -> Qualified a -> Ti (Scheme a)
-generalize env qt = do
-    evs <- ftvsM env
-    tvs <- ftvsM qt
-    let xvs = tvs List.\\ evs
-        m = zip xvs [0..] <&> \(tv, i) -> (tv, BoundType i $ kindOf tv)
-        bvs = snd <$> m
-        g = Map.fromList $ second (TVar . TvBound) <$> m
-    s <- gets snd
-    let qt' = apply (g <> s) qt
-    pure (Forall bvs qt')
-
-instantiate :: TVars a => Scheme a -> Ti (Qualified a)
-instantiate (Forall bvs qt) = do
-    i <- Map.fromList <$> forM bvs \bv ->
-        (TvBound bv, ) <$> fresh (kindOf bv)
-    pure (apply i qt)
-
-instantiateWith :: (Pretty a, TVars a) => [Type] -> Scheme a -> Ti (Qualified a)
-instantiateWith ps sc@(Forall bvs qt) = do
-    catchError do
-            when (length bvs /= length ps) do
-                fail $ "expected " <> show (length bvs) <> " type arguments, got " <> show (length ps)
-            unless (all (uncurry (==)) $ zip (kindOf <$> bvs) (kindOf <$> ps)) do
-                fail $ "kind mismatch: " <> pretty bvs <> " vs " <> pretty (kindOf <$> ps)
-        \e ->
-            throwError $ "cannot instantiate scheme " <> pretty sc <> " with parameters " <> pretty ps <> ": " <> e
-
-    let i = Map.fromList $ zip (TvBound <$> bvs) ps
-    pure (apply i qt)
 
 
 infer :: Env -> UntypedTerm -> Ti (Qualified (TypedTerm, Evidence))
