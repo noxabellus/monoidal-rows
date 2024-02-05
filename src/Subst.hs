@@ -21,7 +21,7 @@ instance TVars a => TVars (Map k a) where
     ftvs f = foldr (List.union . ftvs f) []
     apply s = fmap (apply s)
 
-instance TVars a => TVars (Scheme a) where
+instance TVars a => TVars (Quantified a) where
     ftvs f (Forall _ t) = ftvs f t
     apply s (Forall bvs t) = Forall bvs (apply s t)
 
@@ -95,8 +95,6 @@ instance TVars Type where
             | otherwise -> []
         TCon _ -> []
         TApp a b -> ftvs f a `List.union` ftvs f b
-        TProd a -> ftvs f a
-        TSum a -> ftvs f a
         TDataRow a -> ftvs f a
         TEffectRow a -> ftvs f a
 
@@ -106,8 +104,6 @@ instance TVars Type where
             | otherwise -> TVar tv
         TCon c -> TCon c
         TApp a b -> TApp (apply s a) (apply s b)
-        TProd a -> TProd (apply s a)
-        TSum a -> TSum (apply s a)
         TDataRow a -> TDataRow (apply s a)
         TEffectRow a -> TEffectRow (List.nub (apply s a))
 
@@ -115,10 +111,12 @@ instance TVars Constraint where
     ftvs f = \case
         CEqual c -> ftvs f c
         CRow c -> ftvs f c
+        CData c -> ftvs f c
 
     apply s = \case
         CEqual c -> CEqual (apply s c)
         CRow c -> CRow (apply s c)
+        CData c -> CData (apply s c)
 
 instance TVars RowConstraint where
     ftvs f = \case
@@ -128,3 +126,12 @@ instance TVars RowConstraint where
     apply s = \case
         SubRow a b -> SubRow (apply s a) (apply s b)
         ConcatRow a b c -> ConcatRow (apply s a) (apply s b) (apply s c)
+
+instance TVars DataConstraint where
+    ftvs f = \case
+        IsProd a b -> ftvs f a `List.union` ftvs f b
+        IsSum a b -> ftvs f a `List.union` ftvs f b
+
+    apply s = \case
+        IsProd a b -> IsProd (apply s a) (apply s b)
+        IsSum a b -> IsSum (apply s a) (apply s b)

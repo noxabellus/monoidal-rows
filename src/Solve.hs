@@ -15,20 +15,22 @@ import Ti
 
 
 
-solve :: [Constraint] -> Ti [Constraint]
-solve cs = fmap CRow <$> uncurry solveSplit (constraintSplit cs)
+solve :: Env -> [Constraint] -> Ti [Constraint]
+solve env cs = solveSplit env (constraintSplit3 cs)
 
-solveSplit :: [EqualityConstraint] -> [RowConstraint] -> Ti [RowConstraint]
-solveSplit eqs rows = do
+solveSplit :: Env -> ([EqualityConstraint], [RowConstraint], [DataConstraint]) -> Ti [Constraint]
+solveSplit env (eqs, rows, datas) = do
     adlRows <- solveEqs eqs
-    (eqs', rows') <- solveRows (rows <> adlRows)
+    (eqs'1, rows') <- solveRows (rows <> adlRows)
+    (eqs'2, datas') <- solveDatas env datas
+    let eqs' = eqs'1 <> eqs'2
     if null eqs'
         then do
             (eqs'', rows'') <- apMergeSubRows <$> applyM rows'
             if null eqs''
-                then pure rows''
-                else solveSplit eqs'' rows''
-        else solveSplit eqs' rows'
+                then pure (fmap CRow rows'' <> fmap CData datas')
+                else solveSplit env (eqs'', rows'', datas')
+        else solveSplit env (eqs', rows', datas')
 
 solveEqs :: [EqualityConstraint] -> Ti [RowConstraint]
 solveEqs eqs = concat <$> traverse (uncurry $ appliedM2 apUnify) eqs
@@ -36,13 +38,35 @@ solveEqs eqs = concat <$> traverse (uncurry $ appliedM2 apUnify) eqs
 solveRows :: [RowConstraint] -> Ti ([EqualityConstraint], [RowConstraint])
 solveRows [] = pure mempty
 solveRows (x:cs') = do
-    (eqs, unsolved) <- constraintSplit <$> appliedM apConstrainRows x
-    bimap (eqs <>) (unsolved <>) <$> solveRows cs'
-    
-constraintSplit :: [Constraint] -> ([EqualityConstraint], [RowConstraint])
-constraintSplit = partitionWith \case
+    (eqs, unsolvedRows) <- constraintSplitEqRows <$> appliedM apConstrainRows x
+    bimap (eqs <>) (unsolvedRows <>) <$> solveRows cs'
+
+solveDatas :: Env -> [DataConstraint] -> Ti ([EqualityConstraint], [DataConstraint])
+solveDatas _ [] = pure mempty
+solveDatas env (x:cs') = do
+    appliedM (apConstrainData env) x >>= \case
+        CEqual c -> first (c :) <$> solveDatas env cs'
+        CData c -> second (c :) <$> solveDatas env cs'
+        CRow c -> error $ "unexpected row constraint " <> show c
+
+constraintSplitEqRows :: [Constraint] -> ([EqualityConstraint], [RowConstraint])
+constraintSplitEqRows = partitionWith \case
     CEqual c -> Left c
     CRow c -> Right c
+    CData c -> error $ "unexpected data constraint " <> show c
+
+
+constraintSplitEqDatas :: [Constraint] -> ([EqualityConstraint], [DataConstraint])
+constraintSplitEqDatas = partitionWith \case
+    CEqual c -> Left c
+    CData c -> Right c
+    CRow c -> error $ "unexpected row constraint " <> show c
+
+constraintSplit3 :: [Constraint] -> ([EqualityConstraint], [RowConstraint], [DataConstraint])
+constraintSplit3 = partitionWith3 \case
+    CEqual c -> A c
+    CRow c -> B c
+    CData c -> C c 
 
 
 
@@ -226,6 +250,30 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
         pure (CEqual (TEffectRow l'a, TVar tv'a) : cs <> cs')
 
 
+apConstrainData :: Env -> DataConstraint -> Ti Constraint
+apConstrainData env = \case
+    IsProd d r -> apConstrainProd env d r
+    IsSum d r -> apConstrainSum env d r
+
+apConstrainProd :: Env -> Type -> Type -> Ti Constraint
+apConstrainProd env d r =
+    case splitTypeCon d of
+        Just (dataName, dataArgs) ->
+            dataLookup env dataName >>= instantiateWith dataArgs >>= \case
+                DProd m -> pure (CEqual (TDataRow m, r))
+                DSum _ -> fail $ "expected product data type, got " <> pretty d <> " (a sum data type)"
+        _-> pure (CProd d r)
+
+apConstrainSum :: Env -> Type -> Type -> Ti Constraint
+apConstrainSum env d r =
+    case splitTypeCon d of
+        Just (dataName, dataArgs) ->
+            dataLookup env dataName >>= instantiateWith dataArgs >>= \case
+                DSum m -> pure (CEqual (TDataRow m, r))
+                DProd _ -> fail $ "expected sum data type, got " <> pretty d <> " (a product data type)"
+        _-> pure (CSum d r)
+
+
 
 
 exactEff :: [Type] -> Type -> Maybe Type
@@ -255,10 +303,6 @@ apUnify = curry \case
 
     -- NOTE: Kind check??
     (TApp x'a y'a, TApp x'b y'b) -> liftM2 (<>) (apUnify x'a x'b) (apUnify y'a y'b)
-
-    (TProd a, TProd b) -> apUnify a b
-
-    (TSum a, TSum b) -> apUnify a b
 
     (TDataRow m'a, TDataRow m'b) -> do
         let ks'a = Map.keys m'a

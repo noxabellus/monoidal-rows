@@ -86,12 +86,12 @@ data TypeVar
     | TvMeta MetaType
     deriving (Show, Eq, Ord)
 pattern TFunCon = TCon ("->_in", KType :~> KType :~> KEffectRow :~> KType)
-pattern TProdCon = TCon ("Π", KDataRow :~> KType)
-pattern TSumCon = TCon ("Σ", KDataRow :~> KType)
+pattern TProdCon = TCon ("Π", KType :~> KDataRow :~> KType)
+pattern TSumCon = TCon ("Σ", KType :~> KDataRow :~> KType)
 pattern TUnit = TCon ("()", KType)
 pattern TInt = TCon ("Int", KType)
-pattern TProd a = TApp TProdCon a
-pattern TSum a = TApp TSumCon a
+pattern TProd t r = TApp (TApp TProdCon t) r
+pattern TSum t r = TApp (TApp TSumCon t) r
 pattern TFun a b e = TApp (TApp (TApp TFunCon a) b) e
 pattern TDataRowNil = TDataRow Nil
 pattern TEffectRowNil = TEffectRow Nil
@@ -109,22 +109,42 @@ effectSingleton t = TEffectRow [t]
 data Constraint
     = CEqual EqualityConstraint
     | CRow RowConstraint
+    | CData DataConstraint
     deriving (Show, Eq, Ord)
 
 type EqualityConstraint = (Type, Type)
+
+data DataConstraint
+    = IsProd Type Type
+    | IsSum Type Type
+    deriving (Show, Eq, Ord)
 
 data RowConstraint
     = SubRow Type Type
     | ConcatRow Type Type Type
     deriving (Show, Eq, Ord)
 
+{-# COMPLETE CEqual, CSubRow, CConcatRow, CProd, CSum #-}
+
+pattern CSubRow a b = CRow (SubRow a b)
+pattern CConcatRow a b c = CRow (ConcatRow a b c)
+
+pattern CProd a b = CData (IsProd a b)
+pattern CSum a b = CData (IsSum a b)
 
 
+type Scheme a = Quantified (Qualified a)
 
-data Scheme a = Forall [BoundType] (Qualified a)
-    deriving (Functor, Show)
+
 infix 0 `Forall`
+data Quantified a = Forall [BoundType] a
+    deriving (Functor, Show)
 
+instance Semigroup a => Semigroup (Quantified a) where
+    Forall vs a <> Forall vs' a' = Forall (vs <> vs') (a <> a')
+
+instance Monoid a => Monoid (Quantified a) where
+    mempty = Forall mempty mempty
 
 
 data Qualified a = Qualified [Constraint] a
@@ -246,13 +266,27 @@ instance PrettyVar TypeVar where
 instance Pretty Constraint where
     prettyPrec p = \case
         CEqual (a, b) -> parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
-        CRow (SubRow a b) -> parensIf (p > 0) $ pretty a <> " ◁ " <> pretty b
-        CRow (ConcatRow a b c) -> parensIf (p > 0) $ pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
+        CSubRow a b -> parensIf (p > 0) $ pretty a <> " ◁ " <> pretty b
+        CConcatRow a b c -> parensIf (p > 0) $ pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
+        CProd a b -> parensIf (p > 0) $ pretty a <> " ∏ " <> pretty b
+        CSum a b -> parensIf (p > 0) $ pretty a <> " ∑ " <> pretty b
 
-instance Pretty a => Pretty (Scheme a) where
+instance Pretty a => Pretty (Quantified a) where
     prettyPrec p (Forall [] qt) = prettyPrec p qt
     prettyPrec p (Forall bvs qt) = parensIf (p > 0) $ "∀" <> List.intercalate ", " (prettyVar 0 <$> bvs) <> ". " <> prettyPrec 0 qt
 
 instance Pretty a => Pretty (Qualified a) where
     prettyPrec p (Qualified [] t) = prettyPrec p t
     prettyPrec p (Qualified cs t) = parensIf (p > 0) $ prettyPrec 0 cs <> " ⇒ " <> prettyPrec 0 t
+
+
+
+splitTypeCon :: Type -> Maybe (Var, [Type])
+splitTypeCon = \case
+    TApp a b -> do
+        (name, args) <- splitTypeCon a
+        pure (name, args <> [b])
+
+    TCon (n, _) -> pure (n, [])
+
+    _ -> Nothing

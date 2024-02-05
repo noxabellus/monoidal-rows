@@ -18,12 +18,19 @@ import Subst
 type Evidence = Type
 type SubstSt = (Int, Subst)
 type TypeEnv = Map Var (Scheme Type)
+type DataEnv = Map Var (Quantified Data)
 type EffectEnv = Map Var (Scheme (Map Name (Type, Type)))
+
+data Data
+    = DProd (Map Name Type)
+    | DSum (Map Name Type)
+    deriving (Show, Eq, Ord)
 
 data Env =
     Env
     { typeEnv :: TypeEnv
     , effectEnv :: EffectEnv
+    , dataEnv :: DataEnv
     }
     deriving Show
 
@@ -32,15 +39,24 @@ newtype Ti a
     deriving Functor
 
 
+instance TVars Data where
+    ftvs f = \case
+        DProd fs -> ftvs f fs
+        DSum fs -> ftvs f fs
+    apply s = \case
+        DProd fs -> DProd (apply s fs)
+        DSum fs -> DSum (apply s fs)
+
+
 instance Semigroup Env where
-    Env te1 ee1 <> Env te2 ee2 = Env (te1 <> te2) (ee1 <> ee2)
+    Env te1 ee1 de1 <> Env te2 ee2 de2 = Env (te1 <> te2) (ee1 <> ee2) (de1 <> de2)
 
 instance Monoid Env where
-    mempty = Env mempty mempty
+    mempty = Env mempty mempty mempty
 
 instance TVars Env where
-    ftvs f (Env te ee) = ftvs f te `List.union` ftvs f ee
-    apply s (Env te ee) = Env (apply s te) (apply s ee)
+    ftvs f (Env te ee de) = ftvs f te `List.union` ftvs f ee `List.union` ftvs f de
+    apply s (Env te ee de) = Env (apply s te) (apply s ee) (apply s de)
 
 
 instance Applicative Ti where
@@ -136,13 +152,18 @@ effLookup env i = case Map.lookup i (effectEnv env) of
     Just sc -> pure sc
     Nothing -> fail $ "unbound effect " <> show i
 
+dataLookup :: Env -> Var -> Ti (Quantified Data)
+dataLookup env i = case Map.lookup i (dataEnv env) of
+    Just sc -> pure sc
+    Nothing -> fail $ "unbound data " <> show i
+
 envLookup :: Env -> Var -> Ti (Scheme Type)
 envLookup env i = case Map.lookup i (typeEnv env) of
     Just sc -> pure sc
     Nothing -> fail $ "unbound variable " <> show i
 
 envExt :: Env -> Var -> Type -> Env
-envExt (Env te ee) i t = Env (Map.insert i ([] `Forall` [] :=> t) te) ee
+envExt (Env te ee de) i t = Env (Map.insert i ([] `Forall` [] :=> t) te) ee de
 
 envSingleton :: Var -> Type -> Env
 envSingleton = envExt mempty
@@ -156,7 +177,7 @@ getId = Ti (curry pure)
 
 
 
-generalize :: TVars a => Env -> Qualified a -> Ti (Scheme a)
+generalize :: TVars a => Env -> a -> Ti (Quantified a)
 generalize env qt = do
     evs <- ftvsM env
     tvs <- ftvsM qt
@@ -168,13 +189,13 @@ generalize env qt = do
     let qt' = apply (g <> s) qt
     pure (Forall bvs qt')
 
-instantiate :: TVars a => Scheme a -> Ti (Qualified a)
+instantiate :: TVars a => Quantified a -> Ti a
 instantiate (Forall bvs qt) = do
     i <- Map.fromList <$> forM bvs \bv ->
         (TvBound bv, ) <$> fresh (kindOf bv)
     pure (apply i qt)
 
-instantiateWith :: (Pretty a, TVars a) => [Type] -> Scheme a -> Ti (Qualified a)
+instantiateWith :: (Pretty a, TVars a) => [Type] -> Quantified a -> Ti a
 instantiateWith ps sc@(Forall bvs qt) = do
     catchError do
             when (length bvs /= length ps) do
@@ -182,7 +203,7 @@ instantiateWith ps sc@(Forall bvs qt) = do
             unless (all (uncurry (==)) $ zip (kindOf <$> bvs) (kindOf <$> ps)) do
                 fail $ "kind mismatch: " <> pretty bvs <> " vs " <> pretty (kindOf <$> ps)
         \e ->
-            throwError $ "cannot instantiate scheme " <> pretty sc <> " with parameters " <> pretty ps <> ": " <> e
+            throwError $ "cannot instantiate quantifier " <> pretty sc <> " with parameters " <> pretty ps <> ": " <> e
 
     let i = Map.fromList $ zip (TvBound <$> bvs) ps
     pure (apply i qt)

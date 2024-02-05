@@ -69,6 +69,27 @@ env0 = Env
             ]
       )
     ]
+  , dataEnv = Map.fromList
+    [ ( "V2i"
+      , Forall [] $ DProd $ Map.fromList
+            [ ("x", TInt)
+            , ("y", TInt)
+            ]
+      )
+    , ( "V3"
+      , Forall [BoundType 0 KType] $ DProd $ Map.fromList
+            [ ("x", TVar $ TvBound (BoundType 0 KType))
+            , ("y", TVar $ TvBound (BoundType 0 KType))
+            , ("z", TVar $ TvBound (BoundType 0 KType))
+            ]
+      )
+    , ( "Maybe"
+      , Forall [BoundType 0 KType] $ DSum $ Map.fromList
+            [ ("Just", TVar $ TvBound (BoundType 0 KType))
+            , ("Nothing", TUnit)
+            ]
+      )
+    ]
   }
 
 
