@@ -92,19 +92,19 @@ apSubRows = curry \case
                 _ -> case scanEff m t of
                     [] -> fail $ "effect" <> pretty t <> "not found: " <> pretty m'a <> " ◁ " <> pretty m'b
                     [t'] -> pure $ CEqual (t, t')
-                    ts -> pure $ CRow $ SubRow (effectSingleton t) (TEffectRow ts)
+                    ts -> pure $ CSubRow (effectSingleton t) (TEffectRow ts)
 
     (TVar tv'a, TVar tv'b)
         | let k = kindOf tv'a
         , k == kindOf tv'b
         , k == KDataRow || k == KEffectRow ->
-            pure [CRow $ SubRow (TVar tv'a) (TVar tv'b)]
+            pure [CSubRow (TVar tv'a) (TVar tv'b)]
 
-    (TVar tv'a, TDataRow m'b)  | kindOf tv'a == KDataRow -> pure [CRow $ SubRow (TVar tv'a) (TDataRow m'b) ]
-    (TDataRow m'a,  TVar tv'b) | kindOf tv'b == KDataRow -> pure [CRow $ SubRow (TDataRow m'a)  (TVar tv'b)]
+    (TVar tv'a, TDataRow m'b)  | kindOf tv'a == KDataRow -> pure [CSubRow (TVar tv'a) (TDataRow m'b) ]
+    (TDataRow m'a,  TVar tv'b) | kindOf tv'b == KDataRow -> pure [CSubRow (TDataRow m'a)  (TVar tv'b)]
 
-    (TVar tv'a, TEffectRow m'b)  | kindOf tv'a == KEffectRow -> pure [CRow $ SubRow (TVar tv'a) (TEffectRow m'b) ]
-    (TEffectRow m'a,  TVar tv'b) | kindOf tv'b == KEffectRow -> pure [CRow $ SubRow (TEffectRow m'a)  (TVar tv'b)]
+    (TVar tv'a, TEffectRow m'b)  | kindOf tv'a == KEffectRow -> pure [CSubRow (TVar tv'a) (TEffectRow m'b) ]
+    (TEffectRow m'a,  TVar tv'b) | kindOf tv'b == KEffectRow -> pure [CSubRow (TEffectRow m'a)  (TVar tv'b)]
 
     (a, b) -> fail $ "expected row types (of the same kind) for row sub, got " <> pretty a <> " ◁ " <> pretty b
 
@@ -174,13 +174,13 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
 
     (TEffectRow a, TEffectRow b, t'c) -> do
         let (cs, c) =
-                foldBy (mempty  :: ([Constraint], [Type])) (a <> b)
+                foldBy mempty (a <> b)
                 \e (xs, ts) -> case exactEff ts e of
                     Just _ -> (xs, ts)
                     _ -> case scanEff ts e of
                         [] -> (xs, e : ts)
                         [e'] -> (CEqual (e, e') : xs, ts)
-                        es' -> (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs, ts)
+                        es' -> (CSubRow (effectSingleton e) (TEffectRow es') : xs, ts)
         pure (CEqual (TEffectRow c, t'c) : cs)
 
     
@@ -192,37 +192,37 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
         , k == kindOf tv'b
         , k == kindOf tv'c
         , k == KEffectRow || k == KDataRow ->
-            pure [CRow $ ConcatRow (TVar tv'a) (TVar tv'b) (TVar tv'c)]
+            pure [CConcatRow (TVar tv'a) (TVar tv'b) (TVar tv'c)]
 
     (TVar tv'a, TVar tv'b, TDataRow m'c )
         | kindOf tv'a == KDataRow
         , kindOf tv'b == KDataRow ->
-            pure [CRow $ ConcatRow (TVar tv'a) (TVar tv'b) (TDataRow m'c) ]
+            pure [CConcatRow (TVar tv'a) (TVar tv'b) (TDataRow m'c) ]
 
     (TVar tv'a, TDataRow m'b,  TVar tv'c)
         | kindOf tv'a == KDataRow
         , kindOf tv'c == KDataRow ->
-            pure [CRow $ ConcatRow (TVar tv'a) (TDataRow m'b)  (TVar tv'c)]
+            pure [CConcatRow (TVar tv'a) (TDataRow m'b)  (TVar tv'c)]
 
     (TDataRow m'a,  TVar tv'b, TVar tv'c)
         | kindOf tv'b == KDataRow
         , kindOf tv'c == KDataRow ->
-            pure [CRow $ ConcatRow (TDataRow m'a)  (TVar tv'b) (TVar tv'c)]
+            pure [CConcatRow (TDataRow m'a)  (TVar tv'b) (TVar tv'c)]
 
     (TVar tv'a, TVar tv'b, TEffectRow m'c )
         | kindOf tv'a == KEffectRow
         , kindOf tv'b == KEffectRow ->
-            pure [CRow $ ConcatRow (TVar tv'a) (TVar tv'b) (TEffectRow m'c) ]
+            pure [CConcatRow (TVar tv'a) (TVar tv'b) (TEffectRow m'c) ]
 
     (TVar tv'a, TEffectRow m'b,  TVar tv'c)
         | kindOf tv'a == KEffectRow
         , kindOf tv'c == KEffectRow ->
-            pure [CRow $ ConcatRow (TVar tv'a) (TEffectRow m'b)  (TVar tv'c)]
+            pure [CConcatRow (TVar tv'a) (TEffectRow m'b)  (TVar tv'c)]
 
     (TEffectRow m'a,  TVar tv'b, TVar tv'c)
         | kindOf tv'b == KEffectRow
         , kindOf tv'c == KEffectRow ->
-            pure [CRow $ ConcatRow (TEffectRow m'a)  (TVar tv'b) (TVar tv'c)]
+            pure [CConcatRow (TEffectRow m'a)  (TVar tv'b) (TVar tv'c)]
 
     _ -> fail $ "expected row types (of the same kind) for row concat, got "
         <> pretty ta <> " ⊙ " <> pretty tb <> " ~ " <> pretty tc
@@ -240,13 +240,13 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
                 \e (xs, a) -> case scanEff l'b e of
                     [] -> (xs, e : a)
                     [e'] -> (CEqual (e, e') : xs, a)
-                    es' -> (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs, a)
+                    es' -> (CSubRow (effectSingleton e) (TEffectRow es') : xs, a)
         cs' <-
             foldByM mempty (l'b List.\\ l'c)
             \e xs -> case scanEff l'c e of
                 [] -> fail $ "effect " <> pretty e <> " not found: " <> pretty l'b <> " ◂ " <> pretty l'c
                 [e'] -> pure (CEqual (e, e') : xs)
-                es' -> pure (CRow (SubRow (effectSingleton e) (TEffectRow es')) : xs)
+                es' -> pure (CSubRow (effectSingleton e) (TEffectRow es') : xs)
         pure (CEqual (TEffectRow l'a, TVar tv'a) : cs <> cs')
 
 

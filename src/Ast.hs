@@ -96,6 +96,8 @@ pattern TFun a b e = TApp (TApp (TApp TFunCon a) b) e
 pattern TDataRowNil = TDataRow Nil
 pattern TEffectRowNil = TEffectRow Nil
 pattern TConcrete a <- a@(\case TVar _ -> False; _ -> True -> True)
+pattern TVarBound i k = TVar (TvBound (BoundType i k))
+pattern TVarMeta i k = TVar (TvMeta (MetaType i k))
 
 dataSingleton :: Name -> Type -> Type
 dataSingleton n t = TDataRow (Map.singleton n t)
@@ -268,8 +270,8 @@ instance Pretty Constraint where
         CEqual (a, b) -> parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
         CSubRow a b -> parensIf (p > 0) $ pretty a <> " ◁ " <> pretty b
         CConcatRow a b c -> parensIf (p > 0) $ pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
-        CProd a b -> parensIf (p > 0) $ pretty a <> " ∏ " <> pretty b
-        CSum a b -> parensIf (p > 0) $ pretty a <> " ∑ " <> pretty b
+        CProd a b -> parensIf (p > 0) $ pretty a <> " Π " <> pretty b
+        CSum a b -> parensIf (p > 0) $ pretty a <> " Σ " <> pretty b
 
 instance Pretty a => Pretty (Quantified a) where
     prettyPrec p (Forall [] qt) = prettyPrec p qt

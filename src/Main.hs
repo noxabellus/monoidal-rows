@@ -24,17 +24,17 @@ env0 = Env
       , Forall [BoundType 0 KType] $
             [] :=> TFun
                 TUnit
-                (TVar (TvBound (BoundType 0 KType)))
+                (TVarBound 0 KType)
                 (TEffectRow
-                    [TRead (TVar (TvBound (BoundType 0 KType)))])
+                    [TRead (TVarBound 0 KType)])
       )
     , ( "write"
       , Forall [BoundType 0 KType] $
             [] :=> TFun
-                (TVar (TvBound (BoundType 0 KType)))
+                (TVarBound 0 KType)
                 TUnit
                 (TEffectRow
-                    [TWrite (TVar (TvBound (BoundType 0 KType)))])
+                    [TWrite (TVarBound 0 KType)])
       )
     , ( "i_add"
       , Forall [BoundType 0 KType] $
@@ -56,7 +56,7 @@ env0 = Env
       , Forall [BoundType 0 KType] $
             [] :=> Map.fromList
                 [ ( "read"
-                  , (TUnit, TVar (TvBound (BoundType 0 KType)))
+                  , (TUnit, TVarBound 0 KType)
                 )
             ]
       )
@@ -64,7 +64,7 @@ env0 = Env
       , Forall [BoundType 0 KType] $
             [] :=> Map.fromList
                 [ ( "write"
-                  , (TVar (TvBound (BoundType 0 KType)), TUnit)
+                  , (TVarBound 0 KType, TUnit)
                 )
             ]
       )
@@ -78,14 +78,14 @@ env0 = Env
       )
     , ( "V3"
       , Forall [BoundType 0 KType] $ DProd $ Map.fromList
-            [ ("x", TVar $ TvBound (BoundType 0 KType))
-            , ("y", TVar $ TvBound (BoundType 0 KType))
-            , ("z", TVar $ TvBound (BoundType 0 KType))
+            [ ("x", TVarBound 0 KType)
+            , ("y", TVarBound 0 KType)
+            , ("z", TVarBound 0 KType)
             ]
       )
     , ( "Maybe"
       , Forall [BoundType 0 KType] $ DSum $ Map.fromList
-            [ ("Just", TVar $ TvBound (BoundType 0 KType))
+            [ ("Just", TVarBound 0 KType)
             , ("Nothing", TUnit)
             ]
       )
