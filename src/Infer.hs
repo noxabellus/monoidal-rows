@@ -222,8 +222,9 @@ check env tx ut = do
                 (SumExpand x' `Ann` d'b, es'x)
 
         (t, x) -> do
+            let t' = case t of TProd d _ -> d; TSum d _ -> d; _ -> t
             cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
-            pure $ cs'x <> [CEqual (t, t'x)] :=>
+            pure $ cs'x <> [CEqual (t', t'x)] :=>
                 (x', es'x)
 
     -- res <$ traceM do
@@ -296,8 +297,9 @@ checkPatt env = curry \case
             (PSumConstructor n p' `PAnn` d'a, e'p)
 
     (t, p) -> do
+        let t' = case t of TProd d _ -> d; TSum d _ -> d; _ -> t
         cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
-        pure $ CEqual (t, t'p) : cs'p :=> 
+        pure $ CEqual (t', t'p) : cs'p :=> 
             (p', e'p)
 
 
