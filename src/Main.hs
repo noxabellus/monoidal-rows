@@ -71,22 +71,22 @@ env0 = Env
     ]
   , dataEnv = Map.fromList
     [ ( "V2i"
-      , Forall [] $ DProd $ Map.fromList
-            [ ("x", TInt)
-            , ("y", TInt)
+      , Forall [] $ DProd
+            [ ((TcInt 0, TcString "x"), TInt)
+            , ((TcInt 1, TcString "y"), TInt)
             ]
       )
     , ( "V3"
-      , Forall [BoundType 0 KType] $ DProd $ Map.fromList
-            [ ("x", TVarBound 0 KType)
-            , ("y", TVarBound 0 KType)
-            , ("z", TVarBound 0 KType)
+      , Forall [BoundType 0 KType] $ DProd
+            [ ((TcInt 0, TcString "x"), TVarBound 0 KType)
+            , ((TcInt 1, TcString "y"), TVarBound 0 KType)
+            , ((TcInt 2, TcString "z"), TVarBound 0 KType)
             ]
       )
     , ( "Maybe"
-      , Forall [BoundType 0 KType] $ DSum $ Map.fromList
-            [ ("Just", TVarBound 0 KType)
-            , ("Nothing", TUnit)
+      , Forall [BoundType 0 KType] $ DSum
+            [ ((TcInt 0, TcString "Just"), TVarBound 0 KType)
+            , ((TcInt 1, TcString "Nothing"), TUnit)
             ]
       )
     ]

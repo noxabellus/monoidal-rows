@@ -22,8 +22,8 @@ type DataEnv = Map Var (Quantified Data)
 type EffectEnv = Map Var (Scheme (Map Name (Type, Type)))
 
 data Data
-    = DProd (Map Name Type)
-    | DSum (Map Name Type)
+    = DProd [Field]
+    | DSum [Field]
     deriving (Show, Eq, Ord)
 
 data Env =

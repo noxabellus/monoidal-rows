@@ -21,6 +21,14 @@ instance TVars a => TVars (Map k a) where
     ftvs f = foldr (List.union . ftvs f) []
     apply s = fmap (apply s)
 
+instance (TVars a, TVars b) => TVars (Either a b) where
+    ftvs f = \case
+        Left a -> ftvs f a
+        Right b -> ftvs f b
+    apply s = \case
+        Left a -> Left (apply s a)
+        Right b -> Right (apply s b)
+
 instance TVars a => TVars (Quantified a) where
     ftvs f (Forall _ t) = ftvs f t
     apply s (Forall bvs t) = Forall bvs (apply s t)
@@ -91,12 +99,14 @@ instance TVars Patt where
 
 instance TVars Type where
     ftvs f = \case
-        TVar v | f v -> [v]
+        TVar v
+            | f v -> [v]
             | otherwise -> []
         TCon _ -> []
         TApp a b -> ftvs f a `List.union` ftvs f b
         TDataRow a -> ftvs f a
         TEffectRow a -> ftvs f a
+        TConstant _ -> []
 
     apply s = \case
         TVar tv 
@@ -106,6 +116,7 @@ instance TVars Type where
         TApp a b -> TApp (apply s a) (apply s b)
         TDataRow a -> TDataRow (apply s a)
         TEffectRow a -> TEffectRow (List.nub (apply s a))
+        TConstant c -> TConstant c
 
 instance TVars Constraint where
     ftvs f = \case

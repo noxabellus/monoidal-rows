@@ -17,12 +17,12 @@ data Term
     | Ann Term Type
     | Match Term [(Patt, Term)]
 
-    | ProductConstructor [(Name, Term)]
+    | ProductConstructor (Either [Term] [(Name, Term)])
     | ProductConcat Term Term
     | ProductNarrow Term
-    | ProductSelect Term Name
+    | ProductSelect Term (Either Int Name)
 
-    | SumConstructor Name Term
+    | SumConstructor (Either Int Name) Term
     | SumExpand Term
 
     | Handler Type (Map Name (Patt, Term)) Term
@@ -44,8 +44,8 @@ data Patt
     | PInt Int
     | PAnn Patt Type
 
-    | PProductConstructor (Map Name Patt)
-    | PSumConstructor Name Patt
+    | PProductConstructor (Either [Patt] [(Name, Patt)])
+    | PSumConstructor (Either Int Name) Patt
 
     | PWildcard
     deriving Show
@@ -62,6 +62,8 @@ data Kind
     | KArrow Kind Kind
     deriving (Show, Eq, Ord)
 infixr :~>
+pattern KInt = KConstant "Int"
+pattern KString = KConstant "String"
 pattern KType = KConstant "Type"
 pattern KEffect = KConstant "Effect"
 pattern KDataRow = KConstant "DataRow"
@@ -75,9 +77,12 @@ data Type
     = TVar TypeVar
     | TCon TypeCon
     | TApp Type Type
-    | TDataRow (Map Name Type)
+    | TDataRow [Field]
     | TEffectRow [Type]
+    | TConstant Constant
     deriving (Show, Eq, Ord)
+type Field = (Label, Type)
+type Label = (Type, Type)
 type TypeCon = (String, Kind)
 data BoundType = BoundType Int Kind deriving (Show, Eq, Ord)
 data MetaType = MetaType Int Kind deriving (Show, Eq, Ord)
@@ -98,15 +103,20 @@ pattern TEffectRowNil = TEffectRow Nil
 pattern TConcrete a <- a@(\case TVar _ -> False; _ -> True -> True)
 pattern TVarBound i k = TVar (TvBound (BoundType i k))
 pattern TVarMeta i k = TVar (TvMeta (MetaType i k))
+pattern TcInt i = TConstant (CInt i)
+pattern TcString s = TConstant (CString s)
 
-dataSingleton :: Name -> Type -> Type
-dataSingleton n t = TDataRow (Map.singleton n t)
+dataSingleton :: Field -> Type
+dataSingleton f = TDataRow [f]
 
 effectSingleton :: Type -> Type
 effectSingleton t = TEffectRow [t]
 
 
-
+data Constant
+    = CInt Int
+    | CString String
+    deriving (Show, Eq, Ord)
 
 data Constraint
     = CEqual EqualityConstraint
@@ -195,6 +205,9 @@ instance HasKind Type where
             _ -> error "ice: kindOf(TApp a _) where kindOf a /= KArrow"
         TDataRow _ -> KDataRow
         TEffectRow _ -> KEffectRow
+        TConstant c -> case c of
+            CInt _ -> KInt
+            CString _ -> KString
 
 
 
@@ -204,18 +217,21 @@ instance Pretty Term where
         Var v -> prettyVarStrip v
         Unit -> "()"
         Int i -> prettyPrec p i
-        Lambda q x -> parensIf (p > 0) $ "λ" <> prettyPrec 0 q <> ". " <> prettyPrec 0 x
+        Lambda q x -> parensIf (p > 0) $ "λ" <> pretty q <> ". " <> pretty x
         App a b -> parensIf (p > 1) $ prettyPrec 1 a <> " " <> prettyPrec 2 b
-        Ann x t -> parensIf (p > 0) $ prettyPrec 0 x <> " : " <> prettyPrec 0 t
-        Match x cs -> parensIf (p > 0) $ "match " <> prettyPrec 0 x <> " with " <> List.intercalate " | " (prettyPrec 0 <$> cs)
-        ProductConstructor fs -> braces $ List.intercalate ", " $ fs <&> \(n, x) -> n <> " = " <> pretty x
+        Ann x t -> parensIf (p > 0) $ pretty x <> " : " <> pretty t
+        Match x cs -> parensIf (p > 0) $ "match " <> pretty x <> " with " <> List.intercalate " | " (pretty <$> cs)
+        ProductConstructor (Right fs) -> parens $ List.intercalate ", " $ fs <&> \(n, x) -> n <> " = " <> pretty x
+        ProductConstructor (Left xs) -> brackets $ List.intercalate ", " (pretty <$> xs)
         ProductConcat a b -> parensIf (p > 2) $ prettyPrec 2 a <> " ⊙ " <> prettyPrec 3 b
         ProductNarrow x -> parensIf (p > 3) $ "narrow " <> prettyPrec 3 x
-        ProductSelect x n -> parensIf (p > 6) $ prettyPrec 6 x <> " \\ " <> n
-        SumConstructor n x -> angles $ n <> " = " <> pretty x
+        ProductSelect x (Left l) -> parensIf (p > 6) $ prettyPrec 6 x <> " \\ " <> show l
+        ProductSelect x (Right n) -> parensIf (p > 6) $ prettyPrec 6 x <> " \\ " <> n
+        SumConstructor (Left l) x -> angles $ show l <> " = " <> pretty x
+        SumConstructor (Right n) x -> angles $ n <> " = " <> pretty x
         SumExpand x -> parensIf (p > 5) $ "expand " <> prettyPrec 5 x
         Handler t hm b -> parensIf (p > 0) $
-            "with " <> prettyPrec 0 t <> " handler "
+            "with " <> pretty t <> " handler "
                 <> List.intercalate ", " do
                     Map.toList hm <&> \(n, (v, x)) ->
                         n <> " = " <> pretty v <> " => " <> pretty x
@@ -226,24 +242,27 @@ instance Pretty Patt where
         PVar v -> prettyVarStrip v
         PUnit -> "()"
         PInt i -> prettyPrec p i
-        PAnn x t -> parensIf (p > 0) $ prettyPrec 0 x <> " : " <> prettyPrec 0 t
-        PProductConstructor m -> parensIf (p > 0) $ prettyPrec 0 m
-        PSumConstructor n x -> parensIf (p > 0) $ n <> " " <> prettyPrec 1 x
+        PAnn x t -> parensIf (p > 0) $ pretty x <> " : " <> pretty t
+        PProductConstructor (Left m) -> parens $ List.intercalate ", " (pretty <$> m)
+        PProductConstructor (Right m) -> braces $ List.intercalate ", " $ m <&> \(n, x) -> n <> " = " <> pretty x
+        PSumConstructor (Left l) x -> parensIf (p > 0) $ show l <> " " <> pretty x
+        PSumConstructor (Right n) x -> parensIf (p > 0) $ n <> " " <> prettyPrec 1 x
         PWildcard -> "_"
 
 instance Pretty Kind where
     prettyPrec p = \case
         KConstant n -> n
-        KArrow a b -> parensIf (p > 0) $ prettyPrec 1 a <> " ↠ " <> prettyPrec 0 b
+        KArrow a b -> parensIf (p > 0) $ prettyPrec 1 a <> " ↠ " <> pretty b
 
 instance Pretty Type where
     prettyPrec p = \case
         TVar tv -> prettyVarStrip tv
         TCon (n, _) -> n
-        TFun a b e -> parensIf (p > 0) $ prettyPrec 1 a <> " → " <> prettyPrec 0 b <> " in " <> prettyPrec 0 e
+        TFun a b e -> parensIf (p > 0) $ prettyPrec 1 a <> " → " <> pretty b <> " in " <> pretty e
         TApp a b -> parensIf (p > 1) $ prettyPrec 1 a <> " " <> prettyPrec 2 b
-        TDataRow m -> braces $ Map.foldrWithKey (\k t s -> k <> " ∷ " <> pretty t <> ", " <> s) "" m
+        TDataRow m -> braces $ List.intercalate ", " $ m <&> (\((x, n), t) -> pretty x <> "/" <> pretty n <> " ∷ " <> pretty t)
         TEffectRow m -> brackets $ List.intercalate ", " (pretty <$> m)
+        TConstant c -> pretty c
 
 instance PrettyVar BoundType where
     prettyVar p (BoundType i k) = parensIf (p > 0) $ "#" <> show i <> " : " <> pretty k
@@ -265,6 +284,11 @@ instance PrettyVar TypeVar where
         TvBound tv -> prettyVarStrip tv
         TvMeta tv -> prettyVarStrip tv
 
+instance Pretty Constant where
+    pretty = \case
+        CInt i -> show i
+        CString s -> show s
+
 instance Pretty Constraint where
     prettyPrec p = \case
         CEqual (a, b) -> parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
@@ -275,11 +299,11 @@ instance Pretty Constraint where
 
 instance Pretty a => Pretty (Quantified a) where
     prettyPrec p (Forall [] qt) = prettyPrec p qt
-    prettyPrec p (Forall bvs qt) = parensIf (p > 0) $ "∀" <> List.intercalate ", " (prettyVar 0 <$> bvs) <> ". " <> prettyPrec 0 qt
+    prettyPrec p (Forall bvs qt) = parensIf (p > 0) $ "∀" <> List.intercalate ", " (prettyVar 0 <$> bvs) <> ". " <> pretty qt
 
 instance Pretty a => Pretty (Qualified a) where
     prettyPrec p (Qualified [] t) = prettyPrec p t
-    prettyPrec p (Qualified cs t) = parensIf (p > 0) $ prettyPrec 0 cs <> " ⇒ " <> prettyPrec 0 t
+    prettyPrec p (Qualified cs t) = parensIf (p > 0) $ pretty cs <> " ⇒ " <> pretty t
 
 
 

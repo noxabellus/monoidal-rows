@@ -20,6 +20,8 @@ default-extensions:
   - DeriveFoldable
   - DeriveTraversable
 
+  - ScopedTypeVariables
+
 ghc-options:
   - -Wall
   - -Wno-missing-signatures

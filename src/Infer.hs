@@ -66,17 +66,31 @@ infer env ut = do
             pure $ ccs :=>
                 (Match x' cs' `Ann` t'r, es)
 
-        ProductConstructor fs -> do
+        ProductConstructor (Left fs) -> do
+            cs'm :=> (r, m', es'm) <-
+                foldByM ([] :=> (mempty, mempty, TEffectRowNil)) (zip [0..] fs)
+                \(i, x) (cs'm :=> (r, m', es'm)) -> do
+                    cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
+                    es <- fresh KEffectRow
+                    v'n <- fresh KString
+                    pure $ cs'x <> [CConcatRow es'm es'x es] <> cs'm :=>
+                        (((TcInt i, v'n), t'x) : r, x' : m', es)
+            d <- fresh KType
+            pure $ CProd d (TDataRow r) : cs'm :=>
+                (ProductConstructor (Left m') `Ann` d, es'm)
+
+        ProductConstructor (Right fs) -> do
             cs'm :=> (r, m', es'm) <-
                 foldByM ([] :=> (mempty, mempty, TEffectRowNil)) fs
                 \(n, x) (cs'm :=> (r, m', es'm)) -> do
                     cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
                     es <- fresh KEffectRow
+                    v'x <- fresh KInt
                     pure $ cs'x <> [CConcatRow es'm es'x es] <> cs'm :=>
-                        (Map.insert n t'x r, (n, x') : m', es)
+                        (((v'x, TcString n), t'x) : r, (n, x') : m', es)
             d <- fresh KType
             pure $ CProd d (TDataRow r) : cs'm :=>
-                (ProductConstructor m' `Ann` d, es'm)
+                (ProductConstructor (Right m') `Ann` d, es'm)
 
         ProductConcat a b -> do
             cc@(ConcatRow r'a r'b r'c) <- freshDataConcat
@@ -95,17 +109,33 @@ infer env ut = do
             pure $ CProd d'a r'a : CProd d'b r'b : CRow sc : cs'x :=>
                 (ProductNarrow x' `Ann` d'a, es'x)
 
-        ProductSelect x n -> do
+        ProductSelect x (Left l) -> do
             [t, d'r, t'r] <- freshN [KType, KType, KDataRow]
             cs'x :=> (x', es'x) <- check env (TProd d'r t'r) x
-            pure $ CProd d'r t'r : CSubRow (dataSingleton n t) t'r : cs'x :=>
-                (ProductSelect x' n `Ann` t, es'x)
+            v'n <- fresh KString
+            pure $ CProd d'r t'r : CSubRow (dataSingleton ((TcInt l, v'n), t)) t'r : cs'x :=>
+                (ProductSelect x' (Left l) `Ann` t, es'x)
+                
+        ProductSelect x (Right n) -> do
+            [t, d'r, t'r] <- freshN [KType, KType, KDataRow]
+            cs'x :=> (x', es'x) <- check env (TProd d'r t'r) x
+            v'l <- fresh KInt
+            pure $ CProd d'r t'r : CSubRow (dataSingleton ((v'l, TcString n), t)) t'r : cs'x :=>
+                (ProductSelect x' (Right n) `Ann` t, es'x)
 
-        SumConstructor n x -> do
+        SumConstructor (Left l) x -> do
             [d'r, t'r] <- freshN [KType, KDataRow]
             cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
-            pure $ CSum d'r t'r : CSubRow (dataSingleton n t'x) t'r : cs'x :=>
-                (SumConstructor n x' `Ann` d'r, es'x)
+            v'n <- fresh KString
+            pure $ CSum d'r t'r : CSubRow (dataSingleton ((TcInt l, v'n), t'x)) t'r : cs'x :=>
+                (SumConstructor (Left l) x' `Ann` d'r, es'x)
+
+        SumConstructor (Right n) x -> do
+            [d'r, t'r] <- freshN [KType, KDataRow]
+            cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
+            v'l <- fresh KInt
+            pure $ CSum d'r t'r : CSubRow (dataSingleton ((v'l, TcString n), t'x)) t'r : cs'x :=>
+                (SumConstructor (Right n) x' `Ann` d'r, es'x)
 
         SumExpand x -> do
             cs@(SubRow r'a r'b) <- freshDataSub
@@ -167,19 +197,29 @@ check env tx ut = do
             pure $ cs'p <> cs'x <> [CEqual (e, es'x)] :=>
                 (Lambda p' x' `Ann` TFun a b e, TEffectRowNil)
 
-        (t@(TProd d (TDataRow r)), x@(ProductConstructor fs)) -> do
-            cs'm :=> (m', es'm) <-
-                foldByM ([] :=> (mempty, TEffectRowNil)) fs
-                \(n, v) (cs'm :=> (m', es'm)) ->
-                    case Map.lookup n r of
-                        Just t'v -> do
-                            cs'v :=> (v', es'v) <- check env t'v v
-                            es <- fresh KEffectRow
-                            pure $ cs'v <> cs'm <> [CRow $ ConcatRow es'm es'v es] :=>
-                                ((n, v') : m', es)
-                        _ -> fail $ "field " <> n <> " of product constructor " <> pretty x <> " not in type " <> pretty t
-            pure $ cs'm :=>
-                (ProductConstructor m' `Ann` d, es'm)
+        (TProd d r, ProductConstructor (Left fs)) -> do
+            cs'm :=> (r', m', es'm) <-
+                foldByM ([] :=> (mempty, mempty, TEffectRowNil)) (zip [0..] fs)
+                \(i, v) (cs'm :=> (r', m', es'm)) -> do
+                    cs'v :=> (v'@(AnnOf t'v), es'v) <- infer env v
+                    es <- fresh KEffectRow
+                    v'n <- fresh KString
+                    pure $ CConcatRow es'm es'v es : cs'v <> cs'm :=>
+                        (((TcInt i, v'n), t'v) : r', v' : m', es)
+            pure $ CEqual (r, TDataRow r') : cs'm :=>
+                (ProductConstructor (Left m') `Ann` d, es'm)
+
+        (TProd d r, ProductConstructor (Right fs)) -> do
+            cs'm :=> (r', m', es'm) <-
+                foldByM ([] :=> (mempty, mempty, TEffectRowNil)) fs
+                \(n, v) (cs'm :=> (r', m', es'm)) -> do
+                    cs'v :=> (v'@(AnnOf t'v), es'v) <- infer env v
+                    es <- fresh KEffectRow
+                    v'l <- fresh KInt
+                    pure $ CConcatRow es'm es'v es : cs'v <> cs'm :=>
+                        (((v'l, TcString n), t'v) : r', (n, v') : m', es)
+            pure $ CEqual (r, TDataRow r') : cs'm :=>
+                (ProductConstructor (Right m') `Ann` d, es'm)
 
         (TProd d'c r'c, ProductConcat a b) -> do
             [d'a, r'a, d'b, r'b] <- freshN [KType, KDataRow, KType, KDataRow]
@@ -196,24 +236,31 @@ check env tx ut = do
             pure $ CProd d'b r'b : cs'x <> [CSubRow r'a r'b] :=>
                 (ProductNarrow x' `Ann` d'a, es'x)
 
-        (t, ProductSelect x n) -> do
+        (t, ProductSelect x (Left l)) -> do
             [d'r, t'r] <- freshN [KType, KDataRow]
             cs'x :=> (x', es'x) <- check env (TProd d'r t'r) x
-            pure $ CProd d'r t'r : cs'x <> [CSubRow (dataSingleton n t) t'r] :=>
-                (ProductSelect x' n `Ann` t, es'x)
+            v'n <- fresh KString
+            pure $ CProd d'r t'r : cs'x <> [CSubRow (dataSingleton ((TcInt l, v'n), t)) t'r] :=>
+                (ProductSelect x' (Left l) `Ann` t, es'x)
 
-        (t@(TSum d'b r'b), SumConstructor n x)
-            | TDataRow m <- r'b ->
-                case Map.lookup n m of
-                    Just t'x -> do
-                        cs'x :=> (x', es'x) <- check env t'x x
-                        pure $ cs'x :=>
-                            (SumConstructor n x' `Ann` d'b, es'x)
-                    _ -> fail $ "variant " <> n <> " of sum constructor " <> pretty x <> " not in type " <> pretty t
-            | otherwise -> do
+        (t, ProductSelect x (Right n)) -> do
+            [d'r, t'r] <- freshN [KType, KDataRow]
+            cs'x :=> (x', es'x) <- check env (TProd d'r t'r) x
+            v'l <- fresh KInt
+            pure $ CProd d'r t'r : cs'x <> [CSubRow (dataSingleton ((v'l, TcString n), t)) t'r] :=>
+                (ProductSelect x' (Right n) `Ann` t, es'x)
+
+        (TSum d'b r'b, SumConstructor (Left l) x) -> do
                 cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
-                pure $ cs'x <> [CSubRow (dataSingleton n t'x) r'b] :=>
-                    (SumConstructor n x' `Ann` d'b, es'x)
+                v'n <- fresh KString
+                pure $ cs'x <> [CSubRow (dataSingleton ((TcInt l, v'n), t'x)) r'b] :=>
+                    (SumConstructor (Left l) x' `Ann` d'b, es'x)
+
+        (TSum d'b r'b, SumConstructor (Right n) x) -> do
+                cs'x :=> (x'@(AnnOf t'x), es'x) <- infer env x
+                v'l <- fresh KInt
+                pure $ cs'x <> [CSubRow (dataSingleton ((v'l, TcString n), t'x)) r'b] :=>
+                    (SumConstructor (Right n) x' `Ann` d'b, es'x)
 
         (TSum d'b r'b, SumExpand x) -> do
             [d'a, r'a] <- freshN [KType, KDataRow]
@@ -245,21 +292,40 @@ inferPatt env = \case
     PInt i -> pure $ [] :=>
         (PInt i `PAnn` TInt, mempty)
 
-    PProductConstructor m -> do
+    PProductConstructor (Left m) -> do
         [d'a, r'a] <- freshN [KType, KDataRow]
         (cs'm :=> (mr'm, m', e'm)) <-
-            foldByM mempty (Map.toList m)
+            foldByM mempty (zip [0..] m)
+            \(i, p) (cs'm :=> (mr'm, m', e'm)) -> do
+                cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
+                v'n <- fresh KString
+                pure $ cs'p <> cs'm :=>
+                    (((TcInt i, v'n), t'p) : mr'm, p' : m', e'p <> e'm)
+        pure $ CProd d'a r'a : CSubRow (TDataRow mr'm) r'a : cs'm :=>
+            (PProductConstructor (Left m') `PAnn` d'a, e'm)
+    PProductConstructor (Right m) -> do
+        [d'a, r'a] <- freshN [KType, KDataRow]
+        (cs'm :=> (mr'm, m', e'm)) <-
+            foldByM mempty m
             \(n, p) (cs'm :=> (mr'm, m', e'm)) -> do
                 cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
-                pure (cs'p <> cs'm :=> (Map.insert n t'p mr'm, Map.insert n p' m', e'p <> e'm))
+                v'l <- fresh KInt
+                pure (cs'p <> cs'm :=> (((v'l, TcString n), t'p) : mr'm, (n, p') : m', e'p <> e'm))
         pure $ CProd d'a r'a : CSubRow (TDataRow mr'm) r'a : cs'm :=>
-            (PProductConstructor m' `PAnn` d'a, e'm)
+            (PProductConstructor (Right m') `PAnn` d'a, e'm)
 
-    PSumConstructor n p -> do
+    PSumConstructor (Left l) p -> do
         [d'a, r'a] <- freshN [KType, KDataRow]
         cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
-        pure $ CSum d'a r'a : CSubRow (dataSingleton n t'p) r'a : cs'p :=>
-            (PSumConstructor n p' `PAnn` d'a, e'p)
+        v'n <- fresh KString
+        pure $ CSum d'a r'a : CSubRow (dataSingleton ((TcInt l, v'n), t'p)) r'a : cs'p :=>
+            (PSumConstructor (Left l) p' `PAnn` d'a, e'p)
+    PSumConstructor (Right n) p -> do
+        [d'a, r'a] <- freshN [KType, KDataRow]
+        cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
+        v'l <- fresh KInt
+        pure $ CSum d'a r'a : CSubRow (dataSingleton ((v'l, TcString n), t'p)) r'a : cs'p :=>
+            (PSumConstructor (Right n) p' `PAnn` d'a, e'p)
 
     PWildcard -> do
         t'w <- fresh KType
@@ -281,20 +347,38 @@ checkPatt env = curry \case
     (t, PWildcard) -> pure $ [] :=>
         (PWildcard `PAnn` t, env)
 
-    (TProd d'a r'a, PProductConstructor m) -> do
+    (TProd d'a r'a, PProductConstructor (Left m)) -> do
         cs'm :=> (mr'm, m', e'm) <-
-            foldByM mempty (Map.toList m)
+            foldByM mempty (zip [0..] m)
+            \(i, p) (cs'm :=> (mr'm, m', e'm)) -> do
+                cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
+                v'n <- fresh KString
+                pure $ cs'p <> cs'm :=>
+                    (((TcInt i, v'n), t'p) : mr'm, p' : m', e'p <> e'm)
+        pure $ CSubRow (TDataRow mr'm) r'a : cs'm :=>
+            (PProductConstructor (Left m') `PAnn` d'a, e'm)
+
+    (TProd d'a r'a, PProductConstructor (Right m)) -> do
+        cs'm :=> (mr'm, m', e'm) <-
+            foldByM mempty m
             \(n, p) (cs'm :=> (mr'm, m', e'm)) -> do
                 cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
+                v'l <- fresh KInt
                 pure $ cs'p <> cs'm :=>
-                    (Map.insert n t'p mr'm, Map.insert n p' m', e'p <> e'm)
+                    (((v'l, TcString n), t'p) : mr'm, (n, p') : m', e'p <> e'm)
         pure $ CSubRow (TDataRow mr'm) r'a : cs'm :=>
-            (PProductConstructor m' `PAnn` d'a, e'm)
+            (PProductConstructor (Right m') `PAnn` d'a, e'm)
 
-    (TSum d'a r'a, PSumConstructor n p) -> do
+    (TSum d'a r'a, PSumConstructor (Left l) p) -> do
         cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
-        pure $ CSubRow (dataSingleton n t'p) r'a : cs'p :=>
-            (PSumConstructor n p' `PAnn` d'a, e'p)
+        v'n <- fresh KString
+        pure $ CSubRow (dataSingleton ((TcInt l, v'n), t'p)) r'a : cs'p :=>
+            (PSumConstructor (Left l) p' `PAnn` d'a, e'p)
+    (TSum d'a r'a, PSumConstructor (Right n) p) -> do
+        cs'p :=> (p'@(PAnnOf t'p), e'p) <- inferPatt env p
+        v'l <- fresh KInt
+        pure $ CSubRow (dataSingleton ((v'l, TcString n), t'p)) r'a : cs'p :=>
+            (PSumConstructor (Right n) p' `PAnn` d'a, e'p)
 
     (t, p) -> do
         let t' = case t of TProd d _ -> d; TSum d _ -> d; _ -> t
