@@ -179,10 +179,10 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
                 Just t' -> pure (CEqual (t, t') : cs, m)
                 _ -> case scanField m l of
                     [] -> pure (cs, (l, t) : m)
-                    [((x', n'), t')] -> pure (CEqual (x, x') : CEqual (n, n') : CEqual (t, t') : cs, m)
                     ts -> fail $ "field " <> pretty x <> "/" <> pretty n
-                        <> " in lhs of " <> pretty m'a <> " ⊙ " <> pretty m'b
-                        <> " cannot be merged, as it matches multiple fields in the rhs: " <> pretty ts
+                        <> " in " <> pretty m'a <> " ⊙ " <> pretty m'b
+                        <> " cannot be merged, as it matches field(s) in the opposing side: " <> pretty ts
+                        <> " (fields must be disjoint in a row concatenation)"
         pure (CEqual (TDataRow m'c, t'c) : cs)
       
 
