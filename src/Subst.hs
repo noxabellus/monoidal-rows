@@ -29,6 +29,14 @@ instance (TVars a, TVars b) => TVars (Either a b) where
         Left a -> Left (apply s a)
         Right b -> Right (apply s b)
 
+instance TVars a => TVars (Maybe a) where
+    ftvs f = \case
+        Just a -> ftvs f a
+        Nothing -> []
+    apply s = \case
+        Just a -> Just (apply s a)
+        Nothing -> Nothing
+
 instance TVars a => TVars (Quantified a) where
     ftvs f (Forall _ t) = ftvs f t
     apply s (Forall bvs t) = Forall bvs (apply s t)
@@ -60,7 +68,7 @@ instance TVars Term where
         ProductSelect x _ -> ftvs f x
         SumConstructor _ x -> ftvs f x
         SumExpand x -> ftvs f x
-        Handler t hm x -> ftvs f t `List.union` ftvs f hm `List.union` ftvs f x
+        Handler t hm r x -> ftvs f t `List.union` ftvs f hm `List.union` ftvs f r `List.union` ftvs f x
 
     apply s = \case
         Var v -> Var v
@@ -76,7 +84,7 @@ instance TVars Term where
         ProductSelect x n -> ProductSelect (apply s x) n
         SumConstructor n x -> SumConstructor n (apply s x)
         SumExpand x -> SumExpand (apply s x)
-        Handler t hm x -> Handler (apply s t) (apply s hm) (apply s x)
+        Handler t hm r x -> Handler (apply s t) (apply s hm) (apply s r) (apply s x)
 
 instance TVars Patt where
     ftvs f = \case
@@ -120,14 +128,21 @@ instance TVars Type where
 
 instance TVars Constraint where
     ftvs f = \case
-        CEqual c -> ftvs f c
+        CEquality c -> ftvs f c
         CRow c -> ftvs f c
         CData c -> ftvs f c
 
     apply s = \case
-        CEqual c -> CEqual (apply s c)
+        CEquality c -> CEquality (apply s c)
         CRow c -> CRow (apply s c)
         CData c -> CData (apply s c)
+
+instance TVars EqualityConstraint where
+    ftvs f = \case
+        Equal a b -> ftvs f a `List.union` ftvs f b
+
+    apply s = \case
+        Equal a b -> Equal (apply s a) (apply s b)
 
 instance TVars RowConstraint where
     ftvs f = \case

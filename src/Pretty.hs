@@ -18,7 +18,7 @@ instance PrettyVar String where
     prettyVar _ = id
     prettyVarStrip = id
 
-instance (PrettyVar a, Pretty b) => PrettyVar (a, b) where
+instance {-# OVERLAPPABLE #-} (PrettyVar a, Pretty b) => PrettyVar (a, b) where
     prettyVar p (n, t) = parensIf (p > 0) $ prettyVar 0 n <> ": " <> pretty t
     prettyVarStrip (n, _) = prettyVarStrip n
 
@@ -28,6 +28,9 @@ instance {-# OVERLAPPABLE #-} Show a => Pretty a where
 instance (Pretty a, Pretty b) => Pretty (a, b) where
     pretty (a, b) = "(" <> pretty a <> ", " <> pretty b <> ")"
 
+instance (Pretty a, Pretty b, Pretty c) => Pretty (a, b, c) where
+    pretty (a, b, c) = "(" <> pretty a <> ", " <> pretty b <> ", " <> pretty c <> ")"
+
 instance Pretty a => Pretty [a] where
     pretty = brackets . List.intercalate ", " . fmap pretty
 
@@ -36,6 +39,9 @@ instance {-# OVERLAPPABLE #-} (Pretty a, Pretty b) => Pretty (Map a b) where
 
 instance Pretty b => Pretty (Either String b) where
     prettyPrec p = either id (prettyPrec p)
+
+instance Pretty a => Pretty (Maybe a) where
+    prettyPrec p = maybe "" (prettyPrec p)
 
 
 

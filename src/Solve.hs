@@ -4,6 +4,7 @@ import Data.List qualified as List
 import Data.Map.Strict qualified as Map
 import Data.Maybe(fromMaybe)
 import Data.Functor((<&>))
+import Data.Foldable
 import Data.Bifunctor
 import Control.Monad
 import Control.Monad.State.Class
@@ -12,7 +13,6 @@ import Util
 import Pretty
 import Ast
 import Ti
-import Data.Foldable (foldrM)
 
 
 
@@ -34,7 +34,8 @@ solveSplit env (eqs, rows, datas) = do
         else solveSplit env (eqs', rows', datas')
 
 solveEqs :: [EqualityConstraint] -> Ti [RowConstraint]
-solveEqs eqs = concat <$> traverse (uncurry $ appliedM2 apUnify) eqs
+solveEqs eqs = concat <$> traverse (\(Equal a b) -> do
+    appliedM2 apUnify a b) eqs
 
 solveRows :: [RowConstraint] -> Ti ([EqualityConstraint], [RowConstraint])
 solveRows [] = pure mempty
@@ -46,26 +47,26 @@ solveDatas :: Env -> [DataConstraint] -> Ti ([EqualityConstraint], [DataConstrai
 solveDatas _ [] = pure mempty
 solveDatas env (x:cs') = do
     appliedM (apConstrainData env) x >>= \case
-        CEqual c -> first (c :) <$> solveDatas env cs'
+        CEquality c -> first (c :) <$> solveDatas env cs'
         CData c -> second (c :) <$> solveDatas env cs'
         CRow c -> error $ "unexpected row constraint " <> show c
 
 constraintSplitEqRows :: [Constraint] -> ([EqualityConstraint], [RowConstraint])
 constraintSplitEqRows = partitionWith \case
-    CEqual c -> Left c
+    CEquality c -> Left c
     CRow c -> Right c
     CData c -> error $ "unexpected data constraint " <> show c
 
 
 constraintSplitEqDatas :: [Constraint] -> ([EqualityConstraint], [DataConstraint])
 constraintSplitEqDatas = partitionWith \case
-    CEqual c -> Left c
+    CEquality c -> Left c
     CData c -> Right c
     CRow c -> error $ "unexpected row constraint " <> show c
 
 constraintSplit3 :: [Constraint] -> ([EqualityConstraint], [RowConstraint], [DataConstraint])
 constraintSplit3 = partitionWith3 \case
-    CEqual c -> A c
+    CEquality c -> A c
     CRow c -> B c
     CData c -> C c 
 
@@ -83,10 +84,10 @@ apSubRows = curry \case
     (TDataRow m'a, TDataRow m'b) -> foldByM [] m'a (findField m'b) where
         findField m (l@(x, n), t) r =
             case exactField m l of
-                Just t' -> pure $ CEqual (t, t') : r
+                Just t' -> pure $ CEqual t t' : r
                 _ -> case scanField m l of
                     [] -> fail $ "field " <> pretty n <> " not found: " <> pretty m'a <> " ◁ " <> pretty m'b
-                    [((x', n'), t')] -> pure $ CEqual (x, x') : CEqual (n, n') : CEqual (t, t') : r
+                    [((x', n'), t')] -> pure $ CEqual x x' : CEqual n n' : CEqual t t' : r
                     ts -> fail $ "field " <> pretty x <> "/" <> pretty n
                         <> " in lhs of " <> pretty m'a <> " ◁ " <> pretty m'b
                         <> " cannot be unified, as it matches multiple fields in the rhs: " <> pretty ts
@@ -97,7 +98,7 @@ apSubRows = curry \case
                 then pure r
                 else case scanEff m t of
                     [] -> fail $ "effect" <> pretty t <> "not found: " <> pretty m'a <> " ◁ " <> pretty m'b
-                    [t'] -> pure $ CEqual (t, t') : r
+                    [t'] -> pure $ CEqual t t' : r
                     ts -> pure $ CSubRow (effectSingleton t) (TEffectRow ts) : r
 
     (TVar tv'a, TVar tv'b)
@@ -105,6 +106,12 @@ apSubRows = curry \case
         , k == kindOf tv'b
         , k == KDataRow || k == KEffectRow ->
             pure [CSubRow (TVar tv'a) (TVar tv'b)]
+
+    (TVar tv'a, TDataRow []) -> pure [CEqual (TVar tv'a) (TDataRow [])]
+    (TDataRow [], TVar tv'b) | kindOf tv'b == KDataRow -> pure []
+    
+    (TVar tv'a, TEffectRow []) -> pure [CEqual (TVar tv'a) (TEffectRow [])]
+    (TEffectRow [], TVar tv'b) | kindOf tv'b == KEffectRow -> pure []
 
     (TVar tv'a, TDataRow m'b)  | kindOf tv'a == KDataRow -> pure [CSubRow (TVar tv'a) (TDataRow m'b) ]
     (TDataRow m'a,  TVar tv'b) | kindOf tv'b == KDataRow -> pure [CSubRow (TDataRow m'a)  (TVar tv'b)]
@@ -143,10 +150,10 @@ apMergeSubRows cs = do
     joinDataMap b =
         foldrM \f@(l@(x, n), t) (bList, eqs) ->
             case exactField bList l of
-                Just t' -> pure (bList, (t, t') : eqs)
+                Just t' -> pure (bList, Equal t t' : eqs)
                 _ -> case scanField bList l of
                     [] -> pure (f : bList, eqs)
-                    [((x', n'), t')] -> pure (bList, (x, x') : (n, n') : (t, t') : eqs)
+                    [((x', n'), t')] -> pure (bList, Equal x x' : Equal n n' : Equal t t' : eqs)
                     ts -> fail $ "field " <> pretty x <> "/" <> pretty n
                         <> " creates ambiguous subtype constraint after constraint reduction: "
                         <> pretty bList <> " ◁ " <> pretty b
@@ -166,7 +173,7 @@ apMergeSubRows cs = do
                 then (bList, eqs, subs)
                 else case scanEff bList t of
                     [] -> (t : bList, eqs, subs)
-                    [t'] -> (bList, (t, t') : eqs, subs)
+                    [t'] -> (bList, Equal t t' : eqs, subs)
                     ts -> (bList, eqs, SubRow (effectSingleton t) (TEffectRow ts) : subs)
 
 
@@ -176,18 +183,27 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
         (cs, m'c) <-
             foldByM mempty (m'a <> m'b)
             \(l@(x, n), t) (cs, m) -> case exactField m l of
-                Just t' -> pure (CEqual (t, t') : cs, m)
+                Just t' -> pure (CEqual t t' : cs, m)
                 _ -> case scanField m l of
                     [] -> pure (cs, (l, t) : m)
                     ts -> fail $ "field " <> pretty x <> "/" <> pretty n
                         <> " in " <> pretty m'a <> " ⊙ " <> pretty m'b
                         <> " cannot be merged, as it matches field(s) in the opposing side: " <> pretty ts
                         <> " (fields must be disjoint in a row concatenation)"
-        pure (CEqual (TDataRow m'c, t'c) : cs)
+        pure (CEqual (TDataRow m'c) t'c : cs)
       
 
     (TVar tv'a, TDataRow m'b, TDataRow m'c) -> mergeDataVar tv'a m'b m'c
     (TDataRow m'a, TVar tv'b, TDataRow m'c) -> mergeDataVar tv'b m'a m'c
+
+    (TDataRow [], TVar tv'b, TVar tv'c) ->
+        pure [CEqual (TVar tv'b) (TVar tv'c)]
+    
+    (TVar tv'a, TDataRow [], TVar tv'c) ->
+        pure [CEqual (TVar tv'a) (TVar tv'c)]
+
+    (TVar tv'a, TVar tv'b, TDataRow []) ->
+        pure [CEqual (TVar tv'a) (TDataRow []), CEqual (TVar tv'b) (TDataRow [])]
 
     (TEffectRow m'a, TEffectRow m'b, t'c) -> do
         let (cs, m'c) =
@@ -196,13 +212,22 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
                     then (xs, ts)
                     else case scanEff ts e of
                         [] -> (xs, e : ts)
-                        [e'] -> (CEqual (e, e') : xs, ts)
+                        [e'] -> (CEqual e e' : xs, ts)
                         es' -> (CSubRow (effectSingleton e) (TEffectRow es') : xs, ts)
-        pure (CEqual (TEffectRow m'c, t'c) : cs)
+        pure (CEqual (TEffectRow m'c) t'c : cs)
 
     
     (TVar tv'a, TEffectRow l'b, TEffectRow l'c) -> mergeEffectVar tv'a l'b l'c
     (TEffectRow l'a, TVar tv'b, TEffectRow l'c) -> mergeEffectVar tv'b l'a l'c
+
+    (TEffectRow [], TVar tv'b, TVar tv'c) ->
+        pure [CEqual (TVar tv'b) (TVar tv'c)]
+    
+    (TVar tv'a, TEffectRow [], TVar tv'c) ->
+        pure [CEqual (TVar tv'a) (TVar tv'c)]
+
+    (TVar tv'a, TVar tv'b, TEffectRow []) ->
+        pure [CEqual (TVar tv'a) (TEffectRow []), CEqual (TVar tv'b) (TEffectRow [])]
 
     (TVar tv'a, TVar tv'b, TVar tv'c)
         | let k = kindOf tv'a
@@ -247,10 +272,10 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
     mergeDataVar tv'a m'b m'c = do
         cs :=> m'a <- foldByM mempty m'c \(l@(x, n), t) (cs :=> m'a) ->
             case exactField m'b l of
-                Just t' -> pure $ CEqual (t, t') : cs :=> m'a
+                Just t' -> pure $ CEqual t t' : cs :=> m'a
                 _ -> case scanField m'b l of
                     [] -> pure $ cs :=> (l, t) : m'a
-                    [((x', n'), t')] -> pure $ CEqual (x, x') : CEqual (n, n') : CEqual (t, t') : cs :=> m'a
+                    [((x', n'), t')] -> pure $ CEqual x x' : CEqual n n' : CEqual t t' : cs :=> m'a
                     ts -> fail $ "field " <> pretty x <> "/" <> pretty n
                         <> " in lhs of ~ in " <> pretty tv'a <> " ⊙ " <> pretty m'b <> " ~ " <> pretty m'c
                         <> " cannot be merged, as it matches multiple fields in the rhs of ~: " <> pretty ts
@@ -265,22 +290,22 @@ apConcatRows ta tb tc = case (ta, tb, tc) of
                         <> " in lhs of inferred " <> pretty m'b <> " ◁ " <> pretty m'c
                         <> " matches multiple fields in the rhs: " <> pretty ts
 
-        pure $ CEqual (TDataRow m'a, TVar tv'a) : cs
+        pure $ CEqual (TDataRow m'a) (TVar tv'a) : cs
 
     mergeEffectVar tv'a m'b m'c = do
         let (cs, m'a) =
                 foldBy mempty (m'c List.\\ m'b)
                 \e (xs, a) -> case scanEff m'b e of
                     [] -> (xs, e : a)
-                    [e'] -> (CEqual (e, e') : xs, a)
+                    [e'] -> (CEqual e e' : xs, a)
                     es' -> (CSubRow (effectSingleton e) (TEffectRow es') : xs, a)
         cs' <-
             foldByM mempty (m'b List.\\ m'c)
             \e xs -> case scanEff m'c e of
                 [] -> fail $ "effect " <> pretty e <> " not found: " <> pretty m'b <> " ◁ " <> pretty m'c
-                [e'] -> pure (CEqual (e, e') : xs)
+                [e'] -> pure (CEqual e e' : xs)
                 es' -> pure (CSubRow (effectSingleton e) (TEffectRow es') : xs)
-        pure (CEqual (TEffectRow m'a, TVar tv'a) : cs <> cs')
+        pure (CEqual (TEffectRow m'a) (TVar tv'a) : cs <> cs')
 
 
 apConstrainData :: Env -> DataConstraint -> Ti Constraint
@@ -293,7 +318,7 @@ apConstrainProd env d r =
     case splitTypeCon d of
         Just (dataName, dataArgs) ->
             dataLookup env dataName >>= instantiateWith dataArgs >>= \case
-                DProd m -> pure (CEqual (TDataRow m, r))
+                DProd m -> pure (CEqual (TDataRow m) r)
                 DSum _ -> fail $ "expected product data type, got " <> pretty d <> " (a sum data type)"
         _-> pure (CProd d r)
 
@@ -302,7 +327,7 @@ apConstrainSum env d r =
     case splitTypeCon d of
         Just (dataName, dataArgs) ->
             dataLookup env dataName >>= instantiateWith dataArgs >>= \case
-                DSum m -> pure (CEqual (TDataRow m, r))
+                DSum m -> pure (CEqual (TDataRow m) r)
                 DProd _ -> fail $ "expected sum data type, got " <> pretty d <> " (a product data type)"
         _-> pure (CSum d r)
 
@@ -330,7 +355,10 @@ unifiable = curry \case
     (TVar tv'a, b) -> kindOf tv'a == kindOf b
     (a, TVar tv'b) -> kindOf tv'b == kindOf a
     (TCon c'a, TCon c'b) -> c'a == c'b
-    (TApp a'a b'a, TApp a'b b'b) -> unifiable a'a a'b && unifiable b'a b'b
+    (TApp a'a b'a, TApp a'b b'b) -> unifiable a'a a'b && unifiable b'a b'b &&
+        case kindOf a'a of
+            KArrow k'x _ -> k'x == kindOf b'a
+            _ -> False
     (TDataRow a, TDataRow b) ->
         mergeField (a List.\\ b) b && mergeField (b List.\\ a) a where
         mergeField m'a m'b = flip List.all m'a \(l, t) -> case scanField m'b l of
@@ -353,17 +381,21 @@ apUnify = curry \case
 
     (TCon c'a, TCon c'b) | c'a == c'b -> pure []
 
-    -- NOTE: Kind check??
-    (TApp x'a y'a, TApp x'b y'b) -> liftM2 (<>) (apUnify x'a x'b) (apUnify y'a y'b)
+    (TApp x'a y'a, TApp x'b y'b) -> do
+        case kindOf x'a of
+            KArrow k'x _ -> unless (kindOf y'a == k'x) do
+                fail $ "kind mismatch: " <> pretty y'a <> " : " <> pretty (kindOf y'a) <> " ~ " <> pretty x'a <> " : " <> pretty k'x
+            _ -> fail $ "expected arrow kind, got " <> pretty x'a <> " : " <> pretty (kindOf x'a)
+        liftM2 (<>) (apUnify x'a x'b) (appliedM2 apUnify y'a y'b)
 
     (TDataRow a, TDataRow b) ->
         liftM2 (<>) (mergeField (a List.\\ b) b) (mergeField (b List.\\ a) a) where
         mergeField m'a m'b = foldByM mempty m'a \(l@(x, n), t) cs -> case scanField m'b l of
             [] -> fail $ "label " <> pretty x <> "/" <> pretty n <> " not found: " <> pretty a <> " ~ " <> pretty b
             [((x', n'), t')] -> do
-                xs <- apUnify x x'
-                ns <- apUnify n n'
-                ts <- apUnify t t'
+                xs <- appliedM2 apUnify x x'
+                ns <- appliedM2 apUnify n n'
+                ts <- appliedM2 apUnify t t'
                 pure (xs <> ns <> ts <> cs)
             fs -> fail $ "label " <> pretty x <> "/" <> pretty n
                 <> " in the lhs of " <> pretty a <> " ~ " <> pretty b
@@ -373,7 +405,7 @@ apUnify = curry \case
         liftM2 (<>) (mergeEff (a List.\\ b) b) (mergeEff (b List.\\ a) a) where
         mergeEff m'a m'b = foldByM mempty m'a \e'a cs -> case scanEff m'b e'a of
             [] -> fail $ "effect " <> pretty e'a <> " not found: " <> pretty a <> " ∪ " <> pretty b
-            [e'b] -> apUnify e'a e'b <&> (<> cs)
+            [e'b] -> appliedM2 apUnify e'a e'b <&> (<> cs)
             bs -> pure (SubRow (effectSingleton e'a) (TEffectRow bs) : cs)
 
     (TConstant a, TConstant b) | a == b -> pure []
@@ -383,6 +415,10 @@ apUnify = curry \case
 apUnifyVar :: TypeVar -> Type -> Ti ()
 apUnifyVar tv (TVar tv') | tv == tv' = pure ()
 apUnifyVar tv t = do
+    s <- gets snd
+    case Map.lookup tv s of
+        Just t' -> error $ "apUnifyVar: " <> pretty tv <> " already has a value " <> pretty t'
+        Nothing -> pure ()
     tvs <- ftvsM t
     when (kindOf tv /= kindOf t) do
         fail $ "kind mismatch: " <> pretty tv <> " : " <> pretty (kindOf tv) <> " ∪ " <> pretty t <> " : " <> pretty (kindOf t)

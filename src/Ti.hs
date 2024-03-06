@@ -19,7 +19,7 @@ type Evidence = Type
 type SubstSt = (Int, Subst)
 type TypeEnv = Map Var (Scheme Type)
 type DataEnv = Map Var (Quantified Data)
-type EffectEnv = Map Var (Scheme (Map Name (Type, Type)))
+type EffectEnv = Map Var (Scheme (Map Name (Type, Quantified Type)))
 
 data Data
     = DProd [Field]
@@ -92,7 +92,7 @@ instance MonadState SubstSt Ti where
 ftvsM :: TVars a => a -> Ti [TypeVar]
 ftvsM a = do
     s <- gets snd
-    pure (ftvs (\case tv@TvMeta{} -> not (Map.member tv s); _ -> False) a)
+    pure (ftvs (\case tv@TvMeta{} -> not (Map.member tv s); _ -> False) (apply s a))
 
 applyM :: TVars a => a -> Ti a
 applyM a = do
@@ -147,7 +147,7 @@ freshEffectConcat = do
     pure (ConcatRow r'a r'b r'c)
 
 
-effLookup :: Env -> Var -> Ti (Scheme (Map Name (Type, Type)))
+effLookup :: Env -> Var -> Ti (Scheme (Map Name (Type, Quantified Type)))
 effLookup env i = case Map.lookup i (effectEnv env) of
     Just sc -> pure sc
     Nothing -> fail $ "unbound effect " <> show i
@@ -163,7 +163,7 @@ envLookup env i = case Map.lookup i (typeEnv env) of
     Nothing -> fail $ "unbound variable " <> show i
 
 envExt :: Env -> Var -> Type -> Env
-envExt (Env te ee de) i t = Env (Map.insert i ([] `Forall` [] :=> t) te) ee de
+envExt (Env te ee de) i t = Env (Map.insert i (Forall [] $ [] :=> t) te) ee de
 
 envSingleton :: Var -> Type -> Env
 envSingleton = envExt mempty
@@ -182,17 +182,17 @@ generalize env qt = do
     evs <- ftvsM env
     tvs <- ftvsM qt
     let xvs = tvs List.\\ evs
-        m = zip xvs [0..] <&> \(tv, i) -> (tv, BoundType i $ kindOf tv)
-        bvs = snd <$> m
-        g = Map.fromList $ second (TVar . TvBound) <$> m
+        m = zip xvs [0..] <&> \(tv, i) -> (tv, (i, kindOf tv))
+        bvs = snd . snd <$> m
+        g = Map.fromList $ second (TVar . TvBound . uncurry BoundType) <$> m
     s <- gets snd
     let qt' = apply (g <> s) qt
     pure (Forall bvs qt')
 
 instantiate :: TVars a => Quantified a -> Ti a
 instantiate (Forall bvs qt) = do
-    i <- Map.fromList <$> forM bvs \bv ->
-        (TvBound bv, ) <$> fresh (kindOf bv)
+    i <- Map.fromList <$> forM (zip [0..] bvs) \(i, k) ->
+        (TvBound (BoundType i k), ) <$> fresh k
     pure (apply i qt)
 
 instantiateWith :: (Pretty a, TVars a) => [Type] -> Quantified a -> Ti a
@@ -200,10 +200,9 @@ instantiateWith ps sc@(Forall bvs qt) = do
     catchError do
             when (length bvs /= length ps) do
                 fail $ "expected " <> show (length bvs) <> " type arguments, got " <> show (length ps)
-            unless (all (uncurry (==)) $ zip (kindOf <$> bvs) (kindOf <$> ps)) do
+            unless (all (uncurry (==)) $ zip bvs (kindOf <$> ps)) do
                 fail $ "kind mismatch: " <> pretty bvs <> " vs " <> pretty (kindOf <$> ps)
         \e ->
             throwError $ "cannot instantiate quantifier " <> pretty sc <> " with parameters " <> pretty ps <> ": " <> e
-
-    let i = Map.fromList $ zip (TvBound <$> bvs) ps
+    let i = Map.fromList $ zip (TvBound . uncurry BoundType <$> zip [0..] bvs) ps
     pure (apply i qt)

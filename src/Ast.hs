@@ -25,7 +25,7 @@ data Term
     | SumConstructor (Either Int Name) Term
     | SumExpand Term
 
-    | Handler Type (Map Name (Patt, Term)) Term
+    | Handler Type (Map Name (Patt, Term)) (Maybe (Patt, Term)) Term
     deriving Show
 infixl 8 `Ann`
 pattern UnAnn x <- Ann x _
@@ -119,12 +119,13 @@ data Constant
     deriving (Show, Eq, Ord)
 
 data Constraint
-    = CEqual EqualityConstraint
+    = CEquality EqualityConstraint
     | CRow RowConstraint
     | CData DataConstraint
     deriving (Show, Eq, Ord)
 
-type EqualityConstraint = (Type, Type)
+data EqualityConstraint = Type `Equal` Type
+    deriving (Show, Eq, Ord)
 
 data DataConstraint
     = IsProd Type Type
@@ -138,6 +139,8 @@ data RowConstraint
 
 {-# COMPLETE CEqual, CSubRow, CConcatRow, CProd, CSum #-}
 
+pattern CEqual a b = CEquality (Equal a b)
+
 pattern CSubRow a b = CRow (SubRow a b)
 pattern CConcatRow a b c = CRow (ConcatRow a b c)
 
@@ -148,8 +151,8 @@ pattern CSum a b = CData (IsSum a b)
 type Scheme a = Quantified (Qualified a)
 
 
-infix 0 `Forall`
-data Quantified a = Forall [BoundType] a
+infixr 0 `Forall`
+data Quantified a = Forall [Kind] a
     deriving (Functor, Show)
 
 instance Semigroup a => Semigroup (Quantified a) where
@@ -161,7 +164,7 @@ instance Monoid a => Monoid (Quantified a) where
 
 data Qualified a = Qualified [Constraint] a
     deriving (Functor, Show)
-infix 1 :=>
+infixr 0 :=>
 {-# COMPLETE (:=>) #-}
 pattern (:=>) cs t = Qualified cs t
 
@@ -230,11 +233,12 @@ instance Pretty Term where
         SumConstructor (Left l) x -> angles $ show l <> " = " <> pretty x
         SumConstructor (Right n) x -> angles $ n <> " = " <> pretty x
         SumExpand x -> parensIf (p > 5) $ "expand " <> prettyPrec 5 x
-        Handler t hm b -> parensIf (p > 0) $
+        Handler t hm r b -> parensIf (p > 0) $
             "with " <> pretty t <> " handler "
                 <> List.intercalate ", " do
                     Map.toList hm <&> \(n, (v, x)) ->
                         n <> " = " <> pretty v <> " => " <> pretty x
+                <> maybe "" (\(v, x) -> "return " <> pretty v <> " => " <> pretty x) r
             <> " do " <> pretty b
 
 instance Pretty Patt where
@@ -291,15 +295,28 @@ instance Pretty Constant where
 
 instance Pretty Constraint where
     prettyPrec p = \case
-        CEqual (a, b) -> parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
+        CEqual a b -> parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
         CSubRow a b -> parensIf (p > 0) $ pretty a <> " ◁ " <> pretty b
         CConcatRow a b c -> parensIf (p > 0) $ pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
         CProd a b -> parensIf (p > 0) $ pretty a <> " Π " <> pretty b
         CSum a b -> parensIf (p > 0) $ pretty a <> " Σ " <> pretty b
 
+instance Pretty RowConstraint where
+    prettyPrec p = \case
+        SubRow a b -> parensIf (p > 0) $ pretty a <> " ◁ " <> pretty b
+        ConcatRow a b c -> parensIf (p > 0) $ pretty a <> " ⊙ " <> pretty b <> " ~ " <> pretty c
+
+instance Pretty EqualityConstraint where
+    prettyPrec p (a `Equal` b) = parensIf (p > 0) $ pretty a <> " ~ " <> pretty b
+
+instance Pretty DataConstraint where
+    prettyPrec p = \case
+        IsProd a b -> parensIf (p > 0) $ pretty a <> " Π " <> pretty b
+        IsSum a b -> parensIf (p > 0) $ pretty a <> " Σ " <> pretty b
+
 instance Pretty a => Pretty (Quantified a) where
     prettyPrec p (Forall [] qt) = prettyPrec p qt
-    prettyPrec p (Forall bvs qt) = parensIf (p > 0) $ "∀" <> List.intercalate ", " (prettyVar 0 <$> bvs) <> ". " <> pretty qt
+    prettyPrec p (Forall bvs qt) = parensIf (p > 0) $ "∀" <> List.intercalate ", " (prettyVar 0 . uncurry BoundType <$> zip [0..] bvs) <> ". " <> pretty qt
 
 instance Pretty a => Pretty (Qualified a) where
     prettyPrec p (Qualified [] t) = prettyPrec p t
