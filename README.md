@@ -159,9 +159,9 @@ self-education.
 
 For my own future and expanded work based on this study,
 check out the [Ribbon](https://ribbon-lang.github.io) programming language.
-It's an embeddable algebraic effects language with a focus on data polymorphism
-and allocator strategies, motivated by deep extensibility in the style of
-Lua/LISP.
+It is an embeddable algebraic effects language with a focus on
+data polymorphism and structured allocation, motivated by deep extensibility
+in the style of Lua/LISP.
 
 ## Discussion
 Contact me:
